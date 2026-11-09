@@ -33,8 +33,7 @@ MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
 SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
 TIMEFRAMES = ("1m", "5m", "15m", "1h")
-BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret").strip()
-BRIDGE_SECRET_VALID = len(BRIDGE_SECRET) >= 24 and not BRIDGE_SECRET.lower().startswith("replace-")
+BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").lower() == "true"
@@ -106,7 +105,6 @@ class AssetState:
     last_message_ts: int | None = None
     last_depth_update: int | None = None
     connection_error: str | None = None
-    commodity_session: dict[str, Any] | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -317,8 +315,61 @@ async def send_telegram(message: str) -> None:
         log.warning("Telegram send failed: %s", exc)
 
 
+def build_event_trade_plan(st: AssetState, event_type: str, timeframe: str, event_price: float | None) -> dict[str, Any]:
+    """Create transparent, event-based reference levels; never invent levels without valid candle data."""
+    side_by_event = {
+        "LOWER_LIQUIDITY_SWEEP": "BUY",
+        "BULLISH_RANGE_EXPANSION": "BUY",
+        "UPPER_LIQUIDITY_SWEEP": "SELL",
+        "BEARISH_RANGE_EXPANSION": "SELL",
+    }
+    side = side_by_event.get(event_type)
+    candles = list(st.candles.get(timeframe, []))
+    analysis = st.latest_analysis.get(timeframe, {})
+    base = {
+        "side": side,
+        "entry": None,
+        "stop_loss": None,
+        "tp1": None,
+        "tp2": None,
+        "rr1": "1:2",
+        "rr2": "1:3",
+        "status": "NO VALID SETUP",
+        "basis": "Binance event candle close; indicative levels only",
+    }
+    if not side or not analysis.get("ready") or not analysis.get("atr") or not candles:
+        return base
+
+    candle = candles[-1]
+    entry = float(event_price if event_price is not None else candle["c"])
+    atr = float(analysis["atr"])
+    buffer = max(atr * 0.15, entry * 0.0001)
+    if side == "BUY":
+        stop = float(candle["l"]) - buffer
+        risk = entry - stop
+        if risk <= 0:
+            return base
+        tp1, tp2 = entry + risk * 2, entry + risk * 3
+    else:
+        stop = float(candle["h"]) + buffer
+        risk = stop - entry
+        if risk <= 0:
+            return base
+        tp1, tp2 = entry - risk * 2, entry - risk * 3
+
+    return {
+        **base,
+        "entry": round(entry, 8),
+        "stop_loss": round(stop, 8),
+        "tp1": round(tp1, 8),
+        "tp2": round(tp2, 8),
+        "status": "REFERENCE PLAN",
+    }
+
+
 async def publish_event(key: str, event_type: str, detail: str, price: float | None, timeframe: str) -> None:
     st = states[key]
+    plan = build_event_trade_plan(st, event_type, timeframe, price)
     event = {
         "id": f"{key}-{event_type}-{now_ms()}",
         "asset": key,
@@ -328,6 +379,7 @@ async def publish_event(key: str, event_type: str, detail: str, price: float | N
         "price": price,
         "time": now_ms(),
         "timeframe": timeframe,
+        "trade_plan": plan,
     }
     st.recent_events.appendleft(event)
     alert_key = f"{key}:{event_type}"
@@ -336,8 +388,12 @@ async def publish_event(key: str, event_type: str, detail: str, price: float | N
         last_alert_sent[alert_key] = current
         vantage_price = st.vantage_price
         vprice = f"\nVantage mapped price: {vantage_price:.4f}" if vantage_price else ""
+        if plan["status"] == "REFERENCE PLAN":
+            levels = f"\nSide: {plan['side']}\nEntry: {plan['entry']}\nSL: {plan['stop_loss']}\nTP1: {plan['tp1']}\nTP2: {plan['tp2']}"
+        else:
+            levels = "\nTrade levels: no valid setup"
         await send_telegram(
-            f"AST LIQUIDITY RADAR | {key}\n{event_type}\n{detail}\nBinance: {price}\nTF: {timeframe}{vprice}\nThis is a market-data alert, not a trade instruction."
+            f"AST LIQUIDITY RADAR | {key}\n{event_type}\n{detail}\nBinance: {price}\nTF: {timeframe}{levels}{vprice}\nReference levels only; verify spread and execution with your broker."
         )
 
 
@@ -463,54 +519,6 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     liqs = st.liquidation_totals()
     liq_clusters = st.liquidation_clusters()
     higher = st.latest_analysis.get("1h", {})
-    # Educational multi-timeframe setup: calculate levels from the selected
-    # timeframe only after that timeframe confirms a sweep + displacement.
-    # Prices are Binance-derived; this does not place orders.
-    trade_setup = {
-        "status": "NO TRADE", "side": None, "entry": None,
-        "stop_loss": None, "tp1": None, "tp2": None,
-        "timeframe": tf,
-        "reason": f"Waiting for a confirmed {tf} liquidity sweep + displacement",
-    }
-    if tf in TIMEFRAMES and analysis.get("ready") and analysis.get("atr"):
-        atr = float(analysis["atr"])
-        entry = float(analysis["last_close"])
-        trend = analysis.get("local_trend", "NEUTRAL")
-        candles_tf = list(st.candles.get(tf, []))
-        if candles_tf:
-            last_candle = candles_tf[-1]
-            if (analysis.get("lower_sweep") and analysis.get("bull_displacement")
-                    and trend != "BEARISH"):
-                sl = float(last_candle["l"]) - atr * 0.15
-                risk = entry - sl
-                if risk > 0:
-                    trade_setup = {
-                        "status": "BUY CONFIRMED", "side": "BUY",
-                        "entry": entry, "stop_loss": sl,
-                        "tp1": entry + risk * 2, "tp2": entry + risk * 3,
-                        "timeframe": tf,
-                        "reason": f"{tf} lower-liquidity sweep + bullish displacement",
-                    }
-            elif (analysis.get("upper_sweep") and analysis.get("bear_displacement")
-                    and trend != "BULLISH"):
-                sl = float(last_candle["h"]) + atr * 0.15
-                risk = sl - entry
-                if risk > 0:
-                    trade_setup = {
-                        "status": "SELL CONFIRMED", "side": "SELL",
-                        "entry": entry, "stop_loss": sl,
-                        "tp1": entry - risk * 2, "tp2": entry - risk * 3,
-                        "timeframe": tf,
-                        "reason": f"{tf} upper-liquidity sweep + bearish displacement",
-                    }
-                else:
-                    trade_setup["reason"] = "Invalid SELL risk distance; waiting for next setup"
-            else:
-                trade_setup["reason"] = f"No complete {tf} sweep + displacement confirmation"
-    elif not analysis.get("ready"):
-        trade_setup["reason"] = analysis.get("message", f"Waiting for {tf} candle history")
-    else:
-        trade_setup["reason"] = f"ATR data not ready for {tf}"
     vantage_fresh = st.vantage_ts is not None and now_ms() - st.vantage_ts <= 180_000
     exchange_fresh = st.mark_ts is not None and now_ms() - st.mark_ts <= 20_000
     mapped = {
@@ -562,10 +570,9 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
         "analysis": analysis,
-        "trade_setup": trade_setup,
         "scores": scores,
         "events": list(st.recent_events)[:15],
-        "commodity_session": st.commodity_session,
+        "commodity_session": st.latest_analysis.get("commodity_session"),
         "error": st.connection_error,
     }
 
@@ -587,17 +594,6 @@ async def bootstrap_market_data() -> None:
                 state.exchange_prices.append((state.mark_ts, state.mark_price))
         except Exception as exc:
             log.warning("Initial premium index bootstrap failed for %s: %s", key, exc)
-
-        try:
-            oi_now = await http_client.get(f"{REST_BASE}/fapi/v1/openInterest", params={"symbol": state.symbol}, timeout=10.0)
-            oi_now.raise_for_status()
-            oi_payload = oi_now.json()
-            oi_value = safe_float(oi_payload.get("openInterest"))
-            if oi_value is not None:
-                state.open_interest = oi_value
-                state.oi_ts = int(oi_payload.get("time", now_ms()))
-        except Exception as exc:
-            log.warning("Initial OI snapshot failed for %s: %s", key, exc)
 
         for tf in TIMEFRAMES:
             try:
@@ -660,16 +656,7 @@ async def market_stream_worker() -> None:
                     packet = json.loads(raw)
                     data = packet.get("data", packet)
                     event = data.get("e")
-                    if event == "CommodityUpdate":
-                        gold_state = states.get("GOLD")
-                        if gold_state:
-                            gold_state.commodity_session = {
-                                "status": data.get("S"),
-                                "start_time": data.get("t"),
-                                "end_time": data.get("T"),
-                                "updated_ts": data.get("E", now_ms()),
-                            }
-                    elif event == "markPriceUpdate":
+                    if event == "markPriceUpdate":
                         symbol = data.get("s", "")
                         state = next((x for x in states.values() if x.symbol == symbol), None)
                         if state:
@@ -785,7 +772,7 @@ async def rest_metrics_worker() -> None:
         await asyncio.sleep(30)
 
 
-def record_vantage_tick(payload: dict[str, Any]) -> dict[str, Any]:
+def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
     raw_asset = str(payload.get("asset", "")).upper()
     ticker = str(payload.get("symbol", payload.get("ticker", "")))
     if raw_asset in states:
@@ -797,7 +784,7 @@ def record_vantage_tick(payload: dict[str, Any]) -> dict[str, Any]:
         elif "XAU" in combined or "GOLD" in combined:
             key = "GOLD"
         else:
-            raise ValueError("Could not map Vantage MT5 symbol to BTC or GOLD. Check MT5 bridge symbol settings.")
+            raise ValueError("Could not map TradingView ticker to BTC or GOLD. Set the Pine bridge Asset Override.")
 
     bid = safe_float(payload.get("bid"))
     ask = safe_float(payload.get("ask"))
@@ -879,7 +866,7 @@ async def health() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
-        "vantage_mt5_bridge_secret_configured": BRIDGE_SECRET_VALID,
+        "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
     }
 
 
@@ -889,14 +876,14 @@ async def snapshot(timeframe: str = Query("5m", pattern="^(1m|5m|15m|1h)$")) -> 
 
 
 @app.post("/api/vantage/mt5")
-async def vantage_mt5_bridge(request: Request) -> JSONResponse:
-    if not BRIDGE_SECRET_VALID:
-        raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET of at least 24 characters in the server .env first")
-    if request.headers.get("X-AST-Bridge-Secret", "") != BRIDGE_SECRET:
+async def vantage_mt5_bridge(request: Request, secret: str | None = Query(default=None)) -> JSONResponse:
+    if not BRIDGE_SECRET or BRIDGE_SECRET == "replace-this-secret":
+        raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET in the server .env first")
+    if secret != BRIDGE_SECRET:
         raise HTTPException(status_code=401, detail="Invalid bridge secret")
     try:
         payload = await request.json()
-        result = record_vantage_tick(payload)
+        result = record_vantage_heartbeat(payload)
         return JSONResponse({"ok": True, **result})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
