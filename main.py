@@ -369,7 +369,6 @@ def build_event_trade_plan(st: AssetState, event_type: str, timeframe: str, even
 
 async def publish_event(key: str, event_type: str, detail: str, price: float | None, timeframe: str) -> None:
     st = states[key]
-    plan = build_event_trade_plan(st, event_type, timeframe, price)
     event = {
         "id": f"{key}-{event_type}-{now_ms()}",
         "asset": key,
@@ -379,7 +378,6 @@ async def publish_event(key: str, event_type: str, detail: str, price: float | N
         "price": price,
         "time": now_ms(),
         "timeframe": timeframe,
-        "trade_plan": plan,
     }
     st.recent_events.appendleft(event)
     alert_key = f"{key}:{event_type}"
@@ -388,12 +386,8 @@ async def publish_event(key: str, event_type: str, detail: str, price: float | N
         last_alert_sent[alert_key] = current
         vantage_price = st.vantage_price
         vprice = f"\nVantage mapped price: {vantage_price:.4f}" if vantage_price else ""
-        if plan["status"] == "REFERENCE PLAN":
-            levels = f"\nSide: {plan['side']}\nEntry: {plan['entry']}\nSL: {plan['stop_loss']}\nTP1: {plan['tp1']}\nTP2: {plan['tp2']}"
-        else:
-            levels = "\nTrade levels: no valid setup"
         await send_telegram(
-            f"AST LIQUIDITY RADAR | {key}\n{event_type}\n{detail}\nBinance: {price}\nTF: {timeframe}{levels}{vprice}\nReference levels only; verify spread and execution with your broker."
+            f"AST LIQUIDITY RADAR | {key}\n{event_type}\n{detail}\nBinance: {price}\nTF: {timeframe}{vprice}\nEvent information only; reaction levels are shown on the dashboard."
         )
 
 
@@ -512,6 +506,73 @@ def adjusted_price(st: AssetState, exchange_price: float | None) -> float | None
     return exchange_price * st.basis_ratio
 
 
+
+def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]]:
+    """Return candidate horizontal reaction prices from closed Binance candles."""
+    levels: list[dict[str, Any]] = []
+    hourly = list(st.candles.get("1h", []))
+    if hourly:
+        import datetime as _dt
+        current_day = _dt.datetime.fromtimestamp(int(hourly[-1]["t"]) / 1000, tz=_dt.timezone.utc).date()
+        daily: dict[Any, list[dict[str, Any]]] = defaultdict(list)
+        weekly: dict[Any, list[dict[str, Any]]] = defaultdict(list)
+        for candle in hourly:
+            stamp = _dt.datetime.fromtimestamp(int(candle["t"]) / 1000, tz=_dt.timezone.utc)
+            daily[stamp.date()].append(candle)
+            iso = stamp.isocalendar()
+            weekly[(iso.year, iso.week)].append(candle)
+        prior_days = [d for d in daily if d < current_day]
+        if prior_days:
+            d = max(prior_days)
+            group = daily[d]
+            levels.extend([
+                {"name": "Previous Day High", "price": max(float(c["h"]) for c in group), "kind": "resistance", "source": "1H candles"},
+                {"name": "Previous Day Low", "price": min(float(c["l"]) for c in group), "kind": "support", "source": "1H candles"},
+            ])
+        current_iso = _dt.datetime.fromtimestamp(int(hourly[-1]["t"]) / 1000, tz=_dt.timezone.utc).isocalendar()
+        current_week = (current_iso.year, current_iso.week)
+        prior_weeks = [w for w in weekly if w < current_week]
+        if prior_weeks:
+            w = max(prior_weeks)
+            group = weekly[w]
+            levels.extend([
+                {"name": "Previous Week High", "price": max(float(c["h"]) for c in group), "kind": "resistance", "source": "1H candles"},
+                {"name": "Previous Week Low", "price": min(float(c["l"]) for c in group), "kind": "support", "source": "1H candles"},
+            ])
+
+    candles = list(st.candles.get(timeframe, []))
+    if len(candles) >= 9:
+        highs = [float(c["h"]) for c in candles]
+        lows = [float(c["l"]) for c in candles]
+        pivot_highs: list[float] = []
+        pivot_lows: list[float] = []
+        span = 3
+        for i in range(max(span, len(candles) - 240), len(candles) - span):
+            if highs[i] == max(highs[i-span:i+span+1]):
+                pivot_highs.append(highs[i])
+            if lows[i] == min(lows[i-span:i+span+1]):
+                pivot_lows.append(lows[i])
+        if pivot_highs:
+            levels.append({"name": "Recent Swing High", "price": pivot_highs[-1], "kind": "resistance", "source": timeframe})
+        if pivot_lows:
+            levels.append({"name": "Recent Swing Low", "price": pivot_lows[-1], "kind": "support", "source": timeframe})
+        analysis = st.latest_analysis.get(timeframe, {})
+        tolerance = float(analysis.get("atr") or 0) * 0.20
+        if len(pivot_highs) >= 2 and tolerance and abs(pivot_highs[-1] - pivot_highs[-2]) <= tolerance:
+            levels.append({"name": "Equal Highs", "price": (pivot_highs[-1] + pivot_highs[-2]) / 2, "kind": "resistance", "source": timeframe})
+        if len(pivot_lows) >= 2 and tolerance and abs(pivot_lows[-1] - pivot_lows[-2]) <= tolerance:
+            levels.append({"name": "Equal Lows", "price": (pivot_lows[-1] + pivot_lows[-2]) / 2, "kind": "support", "source": timeframe})
+
+    # Keep one nearest occurrence per label and avoid duplicate prices.
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in levels:
+        marker = (item["name"], round(float(item["price"]) * 10000))
+        if marker not in seen and math.isfinite(float(item["price"])):
+            seen.add(marker)
+            unique.append(item)
+    return unique
+
 def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     st = states[key]
     analysis = st.latest_analysis.get(tf, {"ready": False, "message": "Waiting for candles"})
@@ -566,6 +627,7 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "basis_updated_ts": st.basis_updated_ts,
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
+        "reaction_levels": build_reaction_levels(st, tf),
         "exchange_feed_fresh": exchange_fresh,
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
