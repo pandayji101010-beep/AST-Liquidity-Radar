@@ -574,7 +574,12 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
     return unique
 
 def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
-    """Rule-based multi-timeframe setup quality scanner; not a probability forecast."""
+    """Responsive multi-timeframe setup scanner using closed candles only.
+
+    The score is a rule-based confluence index, not a win probability.
+    Higher-timeframe data contributes to the score but does not block the
+    entry-timeframe scan while it is warming up.
+    """
     results: list[dict[str, Any]] = []
     h1 = st.latest_analysis.get("1h", {})
     m15 = st.latest_analysis.get("15m", {})
@@ -583,62 +588,139 @@ def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
 
     for entry_tf in ("1m", "5m"):
         candles = list(st.candles.get(entry_tf, []))
-        ready = len(candles) >= 30 and h1.get("ready") and m15.get("ready")
-        if not ready:
-            results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": "WARMING UP", "side": None,
-                            "score": 0, "h1_bias": h1_bias, "m15_bias": m15_bias,
-                            "checks": {"history": False}, "reason": "Waiting for sufficient 1H, 15m and entry-timeframe candle history"})
+        analysis = st.latest_analysis.get(entry_tf, {})
+        min_bars = 25
+        if len(candles) < min_bars or not analysis.get("ready"):
+            results.append({
+                "asset": st.key, "entry_timeframe": entry_tf,
+                "status": "DATA WARMING", "side": None, "score": 0,
+                "h1_bias": h1_bias, "m15_bias": m15_bias,
+                "bars": len(candles), "required_bars": min_bars,
+                "h1_bars": h1.get("bars", 0), "m15_bars": m15.get("bars", 0),
+                "checks": {"htf_alignment": False, "liquidity_sweep": False,
+                           "displacement": False, "structure_break": False},
+                "reason": f"Entry history {len(candles)}/{min_bars} closed candles; higher timeframe data shown separately",
+                "data_ready": False,
+            })
             continue
 
         highs = [float(c["h"]) for c in candles]
         lows = [float(c["l"]) for c in candles]
         closes = [float(c["c"]) for c in candles]
         opens = [float(c["o"]) for c in candles]
-        analysis = st.latest_analysis.get(entry_tf, {})
-        atr = float(analysis.get("atr") or 0)
-        # A sweep must occur within the last four closed candles, using only candles before it.
-        bull_sweep_idx = bear_sweep_idx = None
-        for i in range(max(20, len(candles)-4), len(candles)):
-            prior_hi = max(highs[max(0, i-20):i])
-            prior_lo = min(lows[max(0, i-20):i])
+        last = candles[-1]
+        atr = float(analysis.get("atr") or 0.0)
+
+        # Detect a sweep in the last 12 closed candles against the preceding
+        # 20-bar range. A sweep does not have to be on the latest candle.
+        bull_sweep_idx = None
+        bear_sweep_idx = None
+        sweep_start = max(20, len(candles) - 12)
+        for i in range(sweep_start, len(candles)):
+            prior_hi = max(highs[i - 20:i])
+            prior_lo = min(lows[i - 20:i])
             if lows[i] < prior_lo and closes[i] > prior_lo:
                 bull_sweep_idx = i
             if highs[i] > prior_hi and closes[i] < prior_hi:
                 bear_sweep_idx = i
 
-        last = candles[-1]
-        body = abs(closes[-1] - opens[-1])
-        rng = max(highs[-1] - lows[-1], 1e-12)
-        bull_disp = bool(atr and closes[-1] > opens[-1] and body >= atr*0.65 and (closes[-1]-lows[-1])/rng >= 0.72)
-        bear_disp = bool(atr and closes[-1] < opens[-1] and body >= atr*0.65 and (closes[-1]-lows[-1])/rng <= 0.28)
-        structure_hi = max(highs[-7:-1])
-        structure_lo = min(lows[-7:-1])
-        bull_bos = closes[-1] > structure_hi
-        bear_bos = closes[-1] < structure_lo
+        # Accept displacement from any of the latest three closed candles;
+        # this avoids requiring the final candle to be the impulse candle.
+        bull_disp = bear_disp = False
+        for i in range(max(0, len(candles) - 3), len(candles)):
+            body = abs(closes[i] - opens[i])
+            rng = max(highs[i] - lows[i], 1e-12)
+            close_pos = (closes[i] - lows[i]) / rng
+            if atr and closes[i] > opens[i] and body >= atr * 0.45 and close_pos >= 0.65:
+                bull_disp = True
+            if atr and closes[i] < opens[i] and body >= atr * 0.45 and close_pos <= 0.35:
+                bear_disp = True
 
-        bull_bias = h1_bias == "BULLISH" and m15_bias == "BULLISH"
-        bear_bias = h1_bias == "BEARISH" and m15_bias == "BEARISH"
-        bull_recent_sweep = bull_sweep_idx is not None and bull_sweep_idx < len(candles)-1
-        bear_recent_sweep = bear_sweep_idx is not None and bear_sweep_idx < len(candles)-1
-        bull_score = 25*int(bull_bias) + 25*int(bull_recent_sweep) + 25*int(bull_disp) + 25*int(bull_bos)
-        bear_score = 25*int(bear_bias) + 25*int(bear_recent_sweep) + 25*int(bear_disp) + 25*int(bear_bos)
+        # Structure shift/break can occur on any of the latest three candles.
+        bull_bos = bear_bos = False
+        for i in range(max(10, len(candles) - 3), len(candles)):
+            prior_hi = max(highs[max(0, i - 10):i])
+            prior_lo = min(lows[max(0, i - 10):i])
+            if closes[i] > prior_hi:
+                bull_bos = True
+            if closes[i] < prior_lo:
+                bear_bos = True
 
-        side = "BUY" if bull_score >= bear_score else "SELL"
+        bull_htf = int(h1_bias == "BULLISH") + int(m15_bias == "BULLISH")
+        bear_htf = int(h1_bias == "BEARISH") + int(m15_bias == "BEARISH")
+        bull_sweep = bull_sweep_idx is not None and (len(candles) - 1 - bull_sweep_idx) <= 12
+        bear_sweep = bear_sweep_idx is not None and (len(candles) - 1 - bear_sweep_idx) <= 12
+
+        # Weighted checklist: H1=20, 15m=15, sweep=25, displacement=20,
+        # structure break=20. Missing HTF history reduces score but never
+        # hides an otherwise developing entry-timeframe move.
+        bull_score = (20 * int(h1_bias == "BULLISH") +
+                      15 * int(m15_bias == "BULLISH") +
+                      25 * int(bull_sweep) +
+                      20 * int(bull_disp) +
+                      20 * int(bull_bos))
+        bear_score = (20 * int(h1_bias == "BEARISH") +
+                      15 * int(m15_bias == "BEARISH") +
+                      25 * int(bear_sweep) +
+                      20 * int(bear_disp) +
+                      20 * int(bear_bos))
+
+        side = "BUY" if bull_score > bear_score else "SELL" if bear_score > bull_score else None
         score = int(max(bull_score, bear_score))
-        checks = ({"htf_alignment": bull_bias, "liquidity_sweep": bull_recent_sweep,
-                   "displacement": bull_disp, "structure_break": bull_bos} if side == "BUY" else
-                  {"htf_alignment": bear_bias, "liquidity_sweep": bear_recent_sweep,
-                   "displacement": bear_disp, "structure_break": bear_bos})
-        all_checks = all(checks.values())
-        status = "A+ SETUP" if all_checks and score == 100 else "GOOD CANDIDATE" if score >= 75 else "WAIT"
-        if not all_checks:
-            side = None
-        missing = [name.replace("_", " ").title() for name, passed in checks.items() if not passed]
-        results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": status, "side": side,
-                        "score": score, "h1_bias": h1_bias, "m15_bias": m15_bias,
-                        "price": closes[-1], "candle_time": int(last["t"]), "checks": checks,
-                        "reason": "All four confirmations aligned" if all_checks else "Waiting for: " + ", ".join(missing),
-                        "data_ready": True})
+        if side == "BUY":
+            checks = {"htf_alignment": bull_htf == 2, "liquidity_sweep": bull_sweep,
+                      "displacement": bull_disp, "structure_break": bull_bos}
+            partial_htf = bull_htf > 0
+        elif side == "SELL":
+            checks = {"htf_alignment": bear_htf == 2, "liquidity_sweep": bear_sweep,
+                      "displacement": bear_disp, "structure_break": bear_bos}
+            partial_htf = bear_htf > 0
+        else:
+            checks = {"htf_alignment": False, "liquidity_sweep": False,
+                      "displacement": False, "structure_break": False}
+            partial_htf = False
+
+        # Keep A+ deliberately selective; earlier stages surface developing
+        # moves so the user can monitor them before every condition aligns.
+        all_core = side is not None and checks["liquidity_sweep"] and checks["displacement"] and checks["structure_break"]
+        if score >= 90 and all_core and checks["htf_alignment"]:
+            status = "A+ SETUP"
+        elif score >= 70:
+            status = "GOOD CANDIDATE"
+        elif score >= 45:
+            status = "SETUP FORMING"
+        elif score >= 25:
+            status = "WATCH"
+        else:
+            status = "NO SETUP"
+
+        missing = []
+        if h1_bias == "WARMING" or m15_bias == "WARMING":
+            missing.append("higher-timeframe history")
+        if side is not None:
+            if not checks["htf_alignment"]:
+                missing.append("full HTF alignment")
+            if not checks["liquidity_sweep"]:
+                missing.append("recent liquidity sweep")
+            if not checks["displacement"]:
+                missing.append("displacement")
+            if not checks["structure_break"]:
+                missing.append("structure break")
+        reason = ("All key confirmations aligned" if status == "A+ SETUP"
+                  else "Monitoring developing move; waiting for " + ", ".join(missing)
+                  if missing else "No clear directional confluence yet")
+
+        results.append({
+            "asset": st.key, "entry_timeframe": entry_tf, "status": status,
+            "side": side, "score": score, "bull_score": int(bull_score),
+            "bear_score": int(bear_score), "h1_bias": h1_bias,
+            "m15_bias": m15_bias, "price": closes[-1],
+            "candle_time": int(last["t"]), "bars": len(candles),
+            "h1_bars": h1.get("bars", 0), "m15_bars": m15.get("bars", 0),
+            "checks": checks, "reason": reason, "data_ready": True,
+            "sweep_age_bars": ((len(candles) - 1 - (bull_sweep_idx if side == "BUY" else bear_sweep_idx))
+                               if ((bull_sweep_idx if side == "BUY" else bear_sweep_idx) is not None) else None),
+        })
     return results
 
 
