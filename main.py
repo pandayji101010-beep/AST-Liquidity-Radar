@@ -33,7 +33,8 @@ MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
 SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
 TIMEFRAMES = ("1m", "5m", "15m", "1h")
-BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
+BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret").strip()
+BRIDGE_SECRET_VALID = len(BRIDGE_SECRET) >= 24 and not BRIDGE_SECRET.lower().startswith("replace-")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").lower() == "true"
@@ -105,6 +106,7 @@ class AssetState:
     last_message_ts: int | None = None
     last_depth_update: int | None = None
     connection_error: str | None = None
+    commodity_session: dict[str, Any] | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -461,6 +463,29 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     liqs = st.liquidation_totals()
     liq_clusters = st.liquidation_clusters()
     higher = st.latest_analysis.get("1h", {})
+    # Educational 1H setup: only publish levels after a sweep + displacement
+    # confirmation on the selected analysis timeframe. Prices are Binance-derived.
+    trade_setup = {"status": "NO TRADE", "side": None, "entry": None, "stop_loss": None, "tp1": None, "tp2": None, "timeframe": tf, "reason": "Waiting for a confirmed 1H liquidity sweep and displacement"}
+    if tf == "1h" and analysis.get("ready") and analysis.get("atr"):
+        atr = float(analysis["atr"])
+        entry = float(analysis["last_close"])
+        trend = analysis.get("local_trend")
+        if analysis.get("lower_sweep") and analysis.get("bull_displacement") and trend != "BEARISH":
+            sl = float(analysis.get("sweep_low", analysis.get("range_low", entry)))
+            # Use the latest closed candle low as the invalidation point.
+            candles_1h = list(st.candles["1h"])
+            sl = float(candles_1h[-1]["l"]) - atr * 0.15
+            risk = entry - sl
+            if risk > 0:
+                trade_setup = {"status": "BUY CONFIRMED", "side": "BUY", "entry": entry, "stop_loss": sl, "tp1": entry + risk * 2, "tp2": entry + risk * 3, "timeframe": "1h", "reason": "1H lower-liquidity sweep + bullish displacement"}
+        elif analysis.get("upper_sweep") and analysis.get("bear_displacement") and trend != "BULLISH":
+            candles_1h = list(st.candles["1h"])
+            sl = float(candles_1h[-1]["h"]) + atr * 0.15
+            risk = sl - entry
+            if risk > 0:
+                trade_setup = {"status": "SELL CONFIRMED", "side": "SELL", "entry": entry, "stop_loss": sl, "tp1": entry - risk * 2, "tp2": entry - risk * 3, "timeframe": "1h", "reason": "1H upper-liquidity sweep + bearish displacement"}
+        else:
+            trade_setup["reason"] = "No complete 1H sweep + displacement confirmation"
     vantage_fresh = st.vantage_ts is not None and now_ms() - st.vantage_ts <= 180_000
     exchange_fresh = st.mark_ts is not None and now_ms() - st.mark_ts <= 20_000
     mapped = {
@@ -512,9 +537,10 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
         "analysis": analysis,
+        "trade_setup": trade_setup,
         "scores": scores,
         "events": list(st.recent_events)[:15],
-        "commodity_session": st.latest_analysis.get("commodity_session"),
+        "commodity_session": st.commodity_session,
         "error": st.connection_error,
     }
 
@@ -536,6 +562,17 @@ async def bootstrap_market_data() -> None:
                 state.exchange_prices.append((state.mark_ts, state.mark_price))
         except Exception as exc:
             log.warning("Initial premium index bootstrap failed for %s: %s", key, exc)
+
+        try:
+            oi_now = await http_client.get(f"{REST_BASE}/fapi/v1/openInterest", params={"symbol": state.symbol}, timeout=10.0)
+            oi_now.raise_for_status()
+            oi_payload = oi_now.json()
+            oi_value = safe_float(oi_payload.get("openInterest"))
+            if oi_value is not None:
+                state.open_interest = oi_value
+                state.oi_ts = int(oi_payload.get("time", now_ms()))
+        except Exception as exc:
+            log.warning("Initial OI snapshot failed for %s: %s", key, exc)
 
         for tf in TIMEFRAMES:
             try:
@@ -598,7 +635,16 @@ async def market_stream_worker() -> None:
                     packet = json.loads(raw)
                     data = packet.get("data", packet)
                     event = data.get("e")
-                    if event == "markPriceUpdate":
+                    if event == "CommodityUpdate":
+                        gold_state = states.get("GOLD")
+                        if gold_state:
+                            gold_state.commodity_session = {
+                                "status": data.get("S"),
+                                "start_time": data.get("t"),
+                                "end_time": data.get("T"),
+                                "updated_ts": data.get("E", now_ms()),
+                            }
+                    elif event == "markPriceUpdate":
                         symbol = data.get("s", "")
                         state = next((x for x in states.values() if x.symbol == symbol), None)
                         if state:
@@ -714,7 +760,7 @@ async def rest_metrics_worker() -> None:
         await asyncio.sleep(30)
 
 
-def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
+def record_vantage_tick(payload: dict[str, Any]) -> dict[str, Any]:
     raw_asset = str(payload.get("asset", "")).upper()
     ticker = str(payload.get("symbol", payload.get("ticker", "")))
     if raw_asset in states:
@@ -726,7 +772,7 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
         elif "XAU" in combined or "GOLD" in combined:
             key = "GOLD"
         else:
-            raise ValueError("Could not map TradingView ticker to BTC or GOLD. Set the Pine bridge Asset Override.")
+            raise ValueError("Could not map Vantage MT5 symbol to BTC or GOLD. Check MT5 bridge symbol settings.")
 
     bid = safe_float(payload.get("bid"))
     ask = safe_float(payload.get("ask"))
@@ -808,7 +854,7 @@ async def health() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
-        "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
+        "vantage_mt5_bridge_secret_configured": BRIDGE_SECRET_VALID,
     }
 
 
@@ -818,14 +864,14 @@ async def snapshot(timeframe: str = Query("5m", pattern="^(1m|5m|15m|1h)$")) -> 
 
 
 @app.post("/api/vantage/mt5")
-async def vantage_mt5_bridge(request: Request, secret: str | None = Query(default=None)) -> JSONResponse:
-    if not BRIDGE_SECRET or BRIDGE_SECRET == "replace-this-secret":
-        raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET in the server .env first")
-    if secret != BRIDGE_SECRET:
+async def vantage_mt5_bridge(request: Request) -> JSONResponse:
+    if not BRIDGE_SECRET_VALID:
+        raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET of at least 24 characters in the server .env first")
+    if request.headers.get("X-AST-Bridge-Secret", "") != BRIDGE_SECRET:
         raise HTTPException(status_code=401, detail="Invalid bridge secret")
     try:
         payload = await request.json()
-        result = record_vantage_heartbeat(payload)
+        result = record_vantage_tick(payload)
         return JSONResponse({"ok": True, **result})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
