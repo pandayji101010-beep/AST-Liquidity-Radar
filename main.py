@@ -32,7 +32,8 @@ REST_BASE = "https://fapi.binance.com"
 MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
 SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
-TIMEFRAMES = ("1m", "5m", "15m", "1h")
+TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+HISTORY_BARS = int(os.getenv("AST_HISTORY_BARS", "10000"))
 BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -84,7 +85,7 @@ class AssetState:
     trades: deque[tuple[int, float]] = field(default_factory=lambda: deque(maxlen=30000))
     liquidation_events: deque[tuple[int, str, float, float]] = field(default_factory=lambda: deque(maxlen=5000))
     candles: dict[str, deque[dict[str, float | int]]] = field(
-        default_factory=lambda: {tf: deque(maxlen=1500) for tf in TIMEFRAMES}
+        default_factory=lambda: {tf: deque(maxlen=HISTORY_BARS + 100) for tf in TIMEFRAMES}
     )
     exchange_prices: deque[tuple[int, float]] = field(default_factory=lambda: deque(maxlen=3000))
     vantage_price: float | None = None
@@ -105,6 +106,9 @@ class AssetState:
     last_message_ts: int | None = None
     last_depth_update: int | None = None
     connection_error: str | None = None
+    trend_lock_side: str | None = None
+    trend_lock_since: int | None = None
+    trend_lock_reason: str = "Waiting for multi-timeframe alignment"
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -574,153 +578,127 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
     return unique
 
 def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
-    """Responsive multi-timeframe setup scanner using closed candles only.
+    """One directional lock per asset, with entry opportunities on available lower TFs.
 
-    The score is a rule-based confluence index, not a win probability.
-    Higher-timeframe data contributes to the score but does not block the
-    entry-timeframe scan while it is warming up.
+    Higher TFs establish/maintain the directional state. A reversal needs broad
+    higher-TF agreement plus lower-TF structure/momentum confirmation. Scores
+    are heuristic confluence scores, never win probabilities.
     """
+    macro_tfs = ("1d", "4h", "1h", "30m")
+    weights = {"1d": 4, "4h": 3, "1h": 2, "30m": 1}
+    ready = {tf: st.latest_analysis.get(tf, {}) for tf in TIMEFRAMES}
+    votes = {"BULLISH": 0, "BEARISH": 0}
+    available_weight = 0
+    for tf in macro_tfs:
+        a = ready.get(tf, {})
+        if a.get("ready"):
+            trend = a.get("local_trend")
+            available_weight += weights[tf]
+            if trend in votes:
+                votes[trend] += weights[tf]
+
+    total = max(available_weight, 1)
+    bull_ratio = votes["BULLISH"] / total
+    bear_ratio = votes["BEARISH"] / total
+    macro_candidate = "BUY" if bull_ratio >= 0.62 else "SELL" if bear_ratio >= 0.62 else None
+
+    # Confirm a reversal with 15m trend and a recent 5m/1m structure break
+    # plus displacement. Do not flip merely because of one opposite candle.
+    def lower_reversal(side: str) -> tuple[bool, list[str]]:
+        tf_checks = []
+        for tf in ("15m", "5m", "1m"):
+            a = ready.get(tf, {})
+            if not a.get("ready"):
+                continue
+            if side == "BUY":
+                tf_checks.append(bool(a.get("bull_displacement") or a.get("range_break_up")))
+            else:
+                tf_checks.append(bool(a.get("bear_displacement") or a.get("range_break_down")))
+        return (sum(tf_checks) >= 2, ["15m", "5m", "1m"])
+
+    h15 = ready.get("15m", {})
+    opposite_buy = macro_candidate == "BUY" and h15.get("ready") and h15.get("local_trend") == "BULLISH"
+    opposite_sell = macro_candidate == "SELL" and h15.get("ready") and h15.get("local_trend") == "BEARISH"
+
+    if st.trend_lock_side is None:
+        if macro_candidate and available_weight >= 6:
+            st.trend_lock_side = macro_candidate
+            st.trend_lock_since = now_ms()
+            st.trend_lock_reason = "Initial higher-timeframe consensus"
+    elif macro_candidate and macro_candidate != st.trend_lock_side:
+        confirmed, _ = lower_reversal(macro_candidate)
+        macro_strong = (bull_ratio >= 0.78 if macro_candidate == "BUY" else bear_ratio >= 0.78)
+        htf_confirmed = opposite_buy if macro_candidate == "BUY" else opposite_sell
+        if macro_strong and htf_confirmed and confirmed:
+            st.trend_lock_side = macro_candidate
+            st.trend_lock_since = now_ms()
+            st.trend_lock_reason = "Confirmed multi-timeframe reversal"
+
+    lock = st.trend_lock_side
+    lock_score = round((bull_ratio if lock == "BUY" else bear_ratio if lock == "SELL" else max(bull_ratio, bear_ratio)) * 100)
     results: list[dict[str, Any]] = []
-    h1 = st.latest_analysis.get("1h", {})
-    m15 = st.latest_analysis.get("15m", {})
-    h1_bias = h1.get("local_trend") if h1.get("ready") else "WARMING"
-    m15_bias = m15.get("local_trend") if m15.get("ready") else "WARMING"
-
-    for entry_tf in ("1m", "5m"):
+    for entry_tf in ("1m", "5m", "15m"):
         candles = list(st.candles.get(entry_tf, []))
-        analysis = st.latest_analysis.get(entry_tf, {})
-        min_bars = 25
-        if len(candles) < min_bars or not analysis.get("ready"):
-            results.append({
-                "asset": st.key, "entry_timeframe": entry_tf,
-                "status": "DATA WARMING", "side": None, "score": 0,
-                "h1_bias": h1_bias, "m15_bias": m15_bias,
-                "bars": len(candles), "required_bars": min_bars,
-                "h1_bars": h1.get("bars", 0), "m15_bars": m15.get("bars", 0),
-                "checks": {"htf_alignment": False, "liquidity_sweep": False,
-                           "displacement": False, "structure_break": False},
-                "reason": f"Entry history {len(candles)}/{min_bars} closed candles; higher timeframe data shown separately",
-                "data_ready": False,
-            })
+        a = ready.get(entry_tf, {})
+        if len(candles) < 30 or not a.get("ready"):
+            results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": "WARMING UP",
+                            "side": None, "score": 0, "trend_lock": lock or "NEUTRAL",
+                            "macro_buy": round(bull_ratio*100), "macro_sell": round(bear_ratio*100),
+                            "price": st.mark_price, "reason": f"Collecting {entry_tf} candle history"})
             continue
-
         highs = [float(c["h"]) for c in candles]
         lows = [float(c["l"]) for c in candles]
         closes = [float(c["c"]) for c in candles]
         opens = [float(c["o"]) for c in candles]
-        last = candles[-1]
-        atr = float(analysis.get("atr") or 0.0)
+        atr = float(a.get("atr") or 0)
+        # Recent sweep window: last 12 closed candles, each compared only to prior bars.
+        bull_sweep = bear_sweep = False
+        for i in range(max(20, len(candles)-12), len(candles)):
+            prior_hi = max(highs[max(0, i-20):i])
+            prior_lo = min(lows[max(0, i-20):i])
+            bull_sweep |= lows[i] < prior_lo and closes[i] > prior_lo
+            bear_sweep |= highs[i] > prior_hi and closes[i] < prior_hi
+        # Momentum/structure can confirm on any of the latest 3 closed bars.
+        bull_disp = bear_disp = bull_bos = bear_bos = False
+        for j in range(max(1, len(candles)-3), len(candles)):
+            body = abs(closes[j] - opens[j])
+            rng = max(highs[j] - lows[j], 1e-12)
+            if atr:
+                bull_disp |= closes[j] > opens[j] and body >= atr*0.45 and (closes[j]-lows[j])/rng >= 0.68
+                bear_disp |= closes[j] < opens[j] and body >= atr*0.45 and (closes[j]-lows[j])/rng <= 0.32
+            left = max(0, j-7)
+            if j > left:
+                bull_bos |= closes[j] > max(highs[left:j])
+                bear_bos |= closes[j] < min(lows[left:j])
 
-        # Detect a sweep in the last 12 closed candles against the preceding
-        # 20-bar range. A sweep does not have to be on the latest candle.
-        bull_sweep_idx = None
-        bear_sweep_idx = None
-        sweep_start = max(20, len(candles) - 12)
-        for i in range(sweep_start, len(candles)):
-            prior_hi = max(highs[i - 20:i])
-            prior_lo = min(lows[i - 20:i])
-            if lows[i] < prior_lo and closes[i] > prior_lo:
-                bull_sweep_idx = i
-            if highs[i] > prior_hi and closes[i] < prior_hi:
-                bear_sweep_idx = i
-
-        # Accept displacement from any of the latest three closed candles;
-        # this avoids requiring the final candle to be the impulse candle.
-        bull_disp = bear_disp = False
-        for i in range(max(0, len(candles) - 3), len(candles)):
-            body = abs(closes[i] - opens[i])
-            rng = max(highs[i] - lows[i], 1e-12)
-            close_pos = (closes[i] - lows[i]) / rng
-            if atr and closes[i] > opens[i] and body >= atr * 0.45 and close_pos >= 0.65:
-                bull_disp = True
-            if atr and closes[i] < opens[i] and body >= atr * 0.45 and close_pos <= 0.35:
-                bear_disp = True
-
-        # Structure shift/break can occur on any of the latest three candles.
-        bull_bos = bear_bos = False
-        for i in range(max(10, len(candles) - 3), len(candles)):
-            prior_hi = max(highs[max(0, i - 10):i])
-            prior_lo = min(lows[max(0, i - 10):i])
-            if closes[i] > prior_hi:
-                bull_bos = True
-            if closes[i] < prior_lo:
-                bear_bos = True
-
-        bull_htf = int(h1_bias == "BULLISH") + int(m15_bias == "BULLISH")
-        bear_htf = int(h1_bias == "BEARISH") + int(m15_bias == "BEARISH")
-        bull_sweep = bull_sweep_idx is not None and (len(candles) - 1 - bull_sweep_idx) <= 12
-        bear_sweep = bear_sweep_idx is not None and (len(candles) - 1 - bear_sweep_idx) <= 12
-
-        # Weighted checklist: H1=20, 15m=15, sweep=25, displacement=20,
-        # structure break=20. Missing HTF history reduces score but never
-        # hides an otherwise developing entry-timeframe move.
-        bull_score = (20 * int(h1_bias == "BULLISH") +
-                      15 * int(m15_bias == "BULLISH") +
-                      25 * int(bull_sweep) +
-                      20 * int(bull_disp) +
-                      20 * int(bull_bos))
-        bear_score = (20 * int(h1_bias == "BEARISH") +
-                      15 * int(m15_bias == "BEARISH") +
-                      25 * int(bear_sweep) +
-                      20 * int(bear_disp) +
-                      20 * int(bear_bos))
-
-        side = "BUY" if bull_score > bear_score else "SELL" if bear_score > bull_score else None
-        score = int(max(bull_score, bear_score))
-        if side == "BUY":
-            checks = {"htf_alignment": bull_htf == 2, "liquidity_sweep": bull_sweep,
-                      "displacement": bull_disp, "structure_break": bull_bos}
-            partial_htf = bull_htf > 0
-        elif side == "SELL":
-            checks = {"htf_alignment": bear_htf == 2, "liquidity_sweep": bear_sweep,
-                      "displacement": bear_disp, "structure_break": bear_bos}
-            partial_htf = bear_htf > 0
+        direction = lock
+        if direction == "BUY":
+            components = {"higher_tf_consensus": bull_ratio >= 0.62, "liquidity_sweep": bull_sweep,
+                          "displacement": bull_disp, "structure_break": bull_bos}
+            setup_score = round(40*int(components["higher_tf_consensus"]) + 20*int(bull_sweep) + 20*int(bull_disp) + 20*int(bull_bos))
+        elif direction == "SELL":
+            components = {"higher_tf_consensus": bear_ratio >= 0.62, "liquidity_sweep": bear_sweep,
+                          "displacement": bear_disp, "structure_break": bear_bos}
+            setup_score = round(40*int(components["higher_tf_consensus"]) + 20*int(bear_sweep) + 20*int(bear_disp) + 20*int(bear_bos))
         else:
-            checks = {"htf_alignment": False, "liquidity_sweep": False,
-                      "displacement": False, "structure_break": False}
-            partial_htf = False
-
-        # Keep A+ deliberately selective; earlier stages surface developing
-        # moves so the user can monitor them before every condition aligns.
-        all_core = side is not None and checks["liquidity_sweep"] and checks["displacement"] and checks["structure_break"]
-        if score >= 90 and all_core and checks["htf_alignment"]:
-            status = "A+ SETUP"
-        elif score >= 70:
-            status = "GOOD CANDIDATE"
-        elif score >= 45:
+            components = {"higher_tf_consensus": False, "liquidity_sweep": bull_sweep or bear_sweep,
+                          "displacement": bull_disp or bear_disp, "structure_break": bull_bos or bear_bos}
+            setup_score = 0
+        if direction and setup_score >= 80:
+            status = "ENTRY CONFIRMED"
+        elif direction and setup_score >= 40:
             status = "SETUP FORMING"
-        elif score >= 25:
-            status = "WATCH"
+        elif direction:
+            status = "TREND LOCK ACTIVE"
         else:
-            status = "NO SETUP"
-
-        missing = []
-        if h1_bias == "WARMING" or m15_bias == "WARMING":
-            missing.append("higher-timeframe history")
-        if side is not None:
-            if not checks["htf_alignment"]:
-                missing.append("full HTF alignment")
-            if not checks["liquidity_sweep"]:
-                missing.append("recent liquidity sweep")
-            if not checks["displacement"]:
-                missing.append("displacement")
-            if not checks["structure_break"]:
-                missing.append("structure break")
-        reason = ("All key confirmations aligned" if status == "A+ SETUP"
-                  else "Monitoring developing move; waiting for " + ", ".join(missing)
-                  if missing else "No clear directional confluence yet")
-
-        results.append({
-            "asset": st.key, "entry_timeframe": entry_tf, "status": status,
-            "side": side, "score": score, "bull_score": int(bull_score),
-            "bear_score": int(bear_score), "h1_bias": h1_bias,
-            "m15_bias": m15_bias, "price": closes[-1],
-            "candle_time": int(last["t"]), "bars": len(candles),
-            "h1_bars": h1.get("bars", 0), "m15_bars": m15.get("bars", 0),
-            "checks": checks, "reason": reason, "data_ready": True,
-            "sweep_age_bars": ((len(candles) - 1 - (bull_sweep_idx if side == "BUY" else bear_sweep_idx))
-                               if ((bull_sweep_idx if side == "BUY" else bear_sweep_idx) is not None) else None),
-        })
+            status = "NEUTRAL / WAIT"
+        results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": status,
+                        "side": direction, "trend_lock": lock or "NEUTRAL",
+                        "score": setup_score, "lock_score": lock_score,
+                        "macro_buy": round(bull_ratio*100), "macro_sell": round(bear_ratio*100),
+                        "price": closes[-1], "candle_time": int(candles[-1]["t"]),
+                        "checks": components, "reason": st.trend_lock_reason,
+                        "data_ready": True})
     return results
 
 
@@ -811,22 +789,34 @@ async def bootstrap_market_data() -> None:
 
         for tf in TIMEFRAMES:
             try:
-                response = await http_client.get(
-                    f"{REST_BASE}/fapi/v1/klines",
-                    params={"symbol": state.symbol, "interval": tf, "limit": 200},
-                    timeout=12.0,
-                )
-                response.raise_for_status()
-                rows = response.json()
-                for row in rows:
-                    # Only use closed candles; the currently forming candle arrives from WS.
-                    if int(row[6]) >= now_ms():
-                        continue
-                    state.candles[tf].append({
-                        "t": int(row[0]), "o": float(row[1]), "h": float(row[2]),
-                        "l": float(row[3]), "c": float(row[4]), "v": float(row[5]),
-                    })
+                # Binance klines endpoint caps each page at 1500. Walk backwards
+                # in time, then restore chronological order for analysis/backtests.
+                collected: list[list[Any]] = []
+                end_time = None
+                remaining = HISTORY_BARS
+                while remaining > 0:
+                    page_limit = min(1500, remaining)
+                    params = {"symbol": state.symbol, "interval": tf, "limit": page_limit}
+                    if end_time is not None:
+                        params["endTime"] = end_time
+                    response = await http_client.get(f"{REST_BASE}/fapi/v1/klines", params=params, timeout=15.0)
+                    response.raise_for_status()
+                    rows = response.json()
+                    if not rows:
+                        break
+                    collected = rows + collected
+                    remaining -= len(rows)
+                    first_open = int(rows[0][0])
+                    if len(rows) < page_limit:
+                        break
+                    end_time = first_open - 1
+                    await asyncio.sleep(0.08)
+                closed = [row for row in collected if int(row[6]) < now_ms()]
+                for row in closed[-HISTORY_BARS:]:
+                    state.candles[tf].append({"t": int(row[0]), "o": float(row[1]), "h": float(row[2]),
+                                              "l": float(row[3]), "c": float(row[4]), "v": float(row[5])})
                 state.latest_analysis[tf] = state.analyse(tf)
+                log.info("Loaded %s historical candles for %s %s", len(state.candles[tf]), key, tf)
             except Exception as exc:
                 log.warning("Candle bootstrap failed for %s %s: %s", key, tf, exc)
 
@@ -856,7 +846,10 @@ async def market_stream_worker() -> None:
             f"{s}@kline_1m",
             f"{s}@kline_5m",
             f"{s}@kline_15m",
+            f"{s}@kline_30m",
             f"{s}@kline_1h",
+            f"{s}@kline_4h",
+            f"{s}@kline_1d",
         ])
     url = MARKET_WS_BASE + "?streams=" + "/".join(streams)
 
@@ -1085,7 +1078,7 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/snapshot")
-async def snapshot(timeframe: str = Query("5m", pattern="^(1m|5m|15m|1h)$")) -> dict[str, Any]:
+async def snapshot(timeframe: str = Query("5m", pattern="^(1m|5m|15m|30m|1h|4h|1d)$")) -> dict[str, Any]:
     return {"time": now_ms(), "timeframe": timeframe, "assets": {key: make_snapshot(key, timeframe) for key in states}}
 
 
@@ -1125,6 +1118,8 @@ async def config() -> dict[str, Any]:
     return {
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
+        "historical_bars_per_timeframe": HISTORY_BARS,
+        "trend_lock_mode": "one direction per asset; flips require multi-timeframe reversal confirmation",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
         "telegram_configured": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "notes": [
