@@ -25,7 +25,7 @@
     <div class="head"><div><div class="asset">LIVE EVENT TAPE</div><div class="sub">Confirmed range sweeps, displacement breaks and liquidation prints</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="events" class="events"><div class="empty">Waiting for first market event…</div></div>
   </section>
-  <div class="footer">Trade plan is a rule-based educational setup, not a guaranteed signal. It is generated only on the 1H timeframe after a closed-candle sweep and displacement confirmation. Levels are Binance-derived and may differ from Vantage quotes. AST pressure scores are rule-based market-pressure indices, not probabilities or guaranteed signals. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. Vantage prices are mapped using a rolling median ratio from your logged-in Vantage MT5 terminal tick bridge. Never use a stale or uncalibrated mapping for execution.</div>
+  <div class="footer">Trade plan is a rule-based educational setup, not a guaranteed signal. It is calculated on the selected analysis timeframe after that timeframe confirms a sweep and displacement. Levels are Binance-derived and may differ from Vantage quotes. AST pressure scores are rule-based market-pressure indices, not probabilities or guaranteed signals. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. Vantage prices are mapped using a rolling median ratio from your logged-in Vantage MT5 terminal tick bridge. Never use a stale or uncalibrated mapping for execution.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -42,7 +42,7 @@ function renderAsset(id,a){
   const setup=a.trade_setup||{};
   const setupKind=setup.status==='BUY CONFIRMED'?'good':setup.status==='SELL CONFIRMED'?'bad':'warn';
   const digits=a.asset==='BTC'?1:3;
-  const setupHtml=`<div class="section">1H trade plan · sweep confirmation</div>
+  const setupHtml=`<div class="section">${setup.timeframe||$('tf').value} trade plan · sweep confirmation</div>
     <div class="score" style="margin-bottom:10px"><div class="head"><b>${setup.status||'NO TRADE'}</b>${tag(setup.timeframe||'1H',setupKind)}</div>
     <div class="small" style="margin:6px 0 10px">${setup.reason||'Waiting for confirmation'}</div>
     <div class="levels">${level('Entry',setup.entry==null?'—':n(setup.entry,digits))}${level('Stop Loss',setup.stop_loss==null?'—':n(setup.stop_loss,digits))}${level('Take Profit 1 · 1:2',setup.tp1==null?'—':n(setup.tp1,digits))}${level('Take Profit 2 · 1:3',setup.tp2==null?'—':n(setup.tp2,digits))}</div>
