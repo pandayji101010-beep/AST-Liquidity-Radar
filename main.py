@@ -573,6 +573,75 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
             unique.append(item)
     return unique
 
+def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
+    """Rule-based multi-timeframe setup quality scanner; not a probability forecast."""
+    results: list[dict[str, Any]] = []
+    h1 = st.latest_analysis.get("1h", {})
+    m15 = st.latest_analysis.get("15m", {})
+    h1_bias = h1.get("local_trend") if h1.get("ready") else "WARMING"
+    m15_bias = m15.get("local_trend") if m15.get("ready") else "WARMING"
+
+    for entry_tf in ("1m", "5m"):
+        candles = list(st.candles.get(entry_tf, []))
+        ready = len(candles) >= 30 and h1.get("ready") and m15.get("ready")
+        if not ready:
+            results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": "WARMING UP", "side": None,
+                            "score": 0, "h1_bias": h1_bias, "m15_bias": m15_bias,
+                            "checks": {"history": False}, "reason": "Waiting for sufficient 1H, 15m and entry-timeframe candle history"})
+            continue
+
+        highs = [float(c["h"]) for c in candles]
+        lows = [float(c["l"]) for c in candles]
+        closes = [float(c["c"]) for c in candles]
+        opens = [float(c["o"]) for c in candles]
+        analysis = st.latest_analysis.get(entry_tf, {})
+        atr = float(analysis.get("atr") or 0)
+        # A sweep must occur within the last four closed candles, using only candles before it.
+        bull_sweep_idx = bear_sweep_idx = None
+        for i in range(max(20, len(candles)-4), len(candles)):
+            prior_hi = max(highs[max(0, i-20):i])
+            prior_lo = min(lows[max(0, i-20):i])
+            if lows[i] < prior_lo and closes[i] > prior_lo:
+                bull_sweep_idx = i
+            if highs[i] > prior_hi and closes[i] < prior_hi:
+                bear_sweep_idx = i
+
+        last = candles[-1]
+        body = abs(closes[-1] - opens[-1])
+        rng = max(highs[-1] - lows[-1], 1e-12)
+        bull_disp = bool(atr and closes[-1] > opens[-1] and body >= atr*0.65 and (closes[-1]-lows[-1])/rng >= 0.72)
+        bear_disp = bool(atr and closes[-1] < opens[-1] and body >= atr*0.65 and (closes[-1]-lows[-1])/rng <= 0.28)
+        structure_hi = max(highs[-7:-1])
+        structure_lo = min(lows[-7:-1])
+        bull_bos = closes[-1] > structure_hi
+        bear_bos = closes[-1] < structure_lo
+
+        bull_bias = h1_bias == "BULLISH" and m15_bias == "BULLISH"
+        bear_bias = h1_bias == "BEARISH" and m15_bias == "BEARISH"
+        bull_recent_sweep = bull_sweep_idx is not None and bull_sweep_idx < len(candles)-1
+        bear_recent_sweep = bear_sweep_idx is not None and bear_sweep_idx < len(candles)-1
+        bull_score = 25*int(bull_bias) + 25*int(bull_recent_sweep) + 25*int(bull_disp) + 25*int(bull_bos)
+        bear_score = 25*int(bear_bias) + 25*int(bear_recent_sweep) + 25*int(bear_disp) + 25*int(bear_bos)
+
+        side = "BUY" if bull_score >= bear_score else "SELL"
+        score = int(max(bull_score, bear_score))
+        checks = ({"htf_alignment": bull_bias, "liquidity_sweep": bull_recent_sweep,
+                   "displacement": bull_disp, "structure_break": bull_bos} if side == "BUY" else
+                  {"htf_alignment": bear_bias, "liquidity_sweep": bear_recent_sweep,
+                   "displacement": bear_disp, "structure_break": bear_bos})
+        all_checks = all(checks.values())
+        status = "A+ SETUP" if all_checks and score == 100 else "GOOD CANDIDATE" if score >= 75 else "WAIT"
+        if not all_checks:
+            side = None
+        missing = [name.replace("_", " ").title() for name, passed in checks.items() if not passed]
+        results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": status, "side": side,
+                        "score": score, "h1_bias": h1_bias, "m15_bias": m15_bias,
+                        "price": closes[-1], "candle_time": int(last["t"]), "checks": checks,
+                        "reason": "All four confirmations aligned" if all_checks else "Waiting for: " + ", ".join(missing),
+                        "data_ready": True})
+    return results
+
+
 def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     st = states[key]
     analysis = st.latest_analysis.get(tf, {"ready": False, "message": "Waiting for candles"})
@@ -628,6 +697,7 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
         "reaction_levels": build_reaction_levels(st, tf),
+        "a_plus_setups": build_a_plus_scanner(st),
         "exchange_feed_fresh": exchange_fresh,
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
@@ -952,6 +1022,12 @@ async def vantage_mt5_bridge(request: Request, secret: str | None = Query(defaul
     except Exception as exc:
         log.exception("Vantage MT5 bridge failed")
         raise HTTPException(status_code=400, detail="Invalid MT5 tick payload") from exc
+
+
+@app.get("/api/scanner")
+async def scanner() -> dict[str, Any]:
+    setups = [item for state in states.values() for item in build_a_plus_scanner(state)]
+    return {"time": now_ms(), "assets": list(states.keys()), "setups": setups}
 
 
 @app.get("/api/events")
