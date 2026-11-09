@@ -22,8 +22,8 @@
     <section class="card" id="gold"></section>
   </div>
   <section class="card full">
-    <div class="head"><div><div class="asset">AST A+ MULTI-TIMEFRAME SETUP SCANNER</div><div class="sub">1H + 15m direction · 1m / 5m entry confirmation</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
-    <div id="scanner" class="scanner-grid"><div class="empty">Scanner warming up…</div></div>
+    <div class="head"><div><div class="asset">AST A+ MULTI-TIMEFRAME SETUP SCANNER</div><div class="sub">1H + 15m bias · 1m / 5m entry scan · early setup stages</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
+    <div class="tiny" style="margin-top:10px">A+ is selective. WATCH / SETUP FORMING / GOOD CANDIDATE surface developing moves earlier. Score is confluence, not win probability.</div><div id="scanner" class="scanner-grid"><div class="empty">Scanner warming up…</div></div>
   </section>
   <section class="card full">
     <div class="head"><div><div class="asset">LIVE EVENT TAPE</div><div class="sub">Confirmed range sweeps, displacement breaks and liquidation prints</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
@@ -99,11 +99,12 @@ function renderAsset(id,a){
 function renderScanner(setups){
   if(!setups || !setups.length){$('scanner').innerHTML='<div class="empty">No assets available for scanning.</div>';return;}
   $('scanner').innerHTML=setups.map(s=>{
-    const good=s.status==='A+ SETUP';
-    const kind=good?'good':s.status==='GOOD CANDIDATE'?'warn':'neutral';
+    const kind=s.status==='A+ SETUP'?'good':(['GOOD CANDIDATE','SETUP FORMING'].includes(s.status)?'warn':'neutral');
     const checks=s.checks||{};
-    const checkLabels={htf_alignment:'HTF aligned',liquidity_sweep:'Liquidity sweep',displacement:'Displacement',structure_break:'Structure break'};
-    return `<div class="scanner-item"><div class="scanner-head"><div><b>${s.asset}</b> · ${s.entry_timeframe} entry</div>${tag(s.status,kind)}</div><div class="scanner-head" style="margin-top:8px"><div class="scanner-score">${s.score??0}<span class="small"> / 100</span></div><b>${s.side||'WAIT'}</b></div><div class="tiny">1H: ${s.h1_bias||'—'} · 15m: ${s.m15_bias||'—'} · Price: ${s.price===undefined?'—':n(s.price,s.asset==='BTC'?1:3)}</div><div class="scanner-checks">${Object.entries(checkLabels).map(([k,label])=>`<span class="check ${checks[k]?'pass':'fail'}">${checks[k]?'✓':'○'} ${label}</span>`).join('')}</div><div class="tiny" style="margin-top:9px">${s.reason||'Waiting for market data'}</div></div>`;
+    const checkLabels={htf_alignment:'Full HTF alignment',liquidity_sweep:'Liquidity sweep',displacement:'Displacement',structure_break:'Structure break'};
+    const price=s.price===undefined?'—':n(s.price,s.asset==='BTC'?1:3);
+    const history=`Bars: entry ${s.bars??0} · 1H ${s.h1_bars??0} · 15m ${s.m15_bars??0}`;
+    return `<div class="scanner-item"><div class="scanner-head"><div><b>${s.asset}</b> · ${s.entry_timeframe} entry</div>${tag(s.status,kind)}</div><div class="scanner-head" style="margin-top:8px"><div class="scanner-score">${s.score??0}<span class="small"> / 100</span></div><b>${s.side||'WAIT'}</b></div><div class="tiny">1H: ${s.h1_bias||'—'} · 15m: ${s.m15_bias||'—'} · Price: ${price}</div><div class="tiny">${history}</div><div class="scanner-checks">${Object.entries(checkLabels).map(([k,label])=>`<span class="check ${checks[k]?'pass':'fail'}">${checks[k]?'✓':'○'} ${label}</span>`).join('')}</div><div class="tiny" style="margin-top:9px">${s.reason||'Waiting for market data'}</div></div>`;
   }).join('');
 }
 function renderEvents(events){
