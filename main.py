@@ -463,29 +463,54 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     liqs = st.liquidation_totals()
     liq_clusters = st.liquidation_clusters()
     higher = st.latest_analysis.get("1h", {})
-    # Educational 1H setup: only publish levels after a sweep + displacement
-    # confirmation on the selected analysis timeframe. Prices are Binance-derived.
-    trade_setup = {"status": "NO TRADE", "side": None, "entry": None, "stop_loss": None, "tp1": None, "tp2": None, "timeframe": tf, "reason": "Waiting for a confirmed 1H liquidity sweep and displacement"}
-    if tf == "1h" and analysis.get("ready") and analysis.get("atr"):
+    # Educational multi-timeframe setup: calculate levels from the selected
+    # timeframe only after that timeframe confirms a sweep + displacement.
+    # Prices are Binance-derived; this does not place orders.
+    trade_setup = {
+        "status": "NO TRADE", "side": None, "entry": None,
+        "stop_loss": None, "tp1": None, "tp2": None,
+        "timeframe": tf,
+        "reason": f"Waiting for a confirmed {tf} liquidity sweep + displacement",
+    }
+    if tf in TIMEFRAMES and analysis.get("ready") and analysis.get("atr"):
         atr = float(analysis["atr"])
         entry = float(analysis["last_close"])
-        trend = analysis.get("local_trend")
-        if analysis.get("lower_sweep") and analysis.get("bull_displacement") and trend != "BEARISH":
-            sl = float(analysis.get("sweep_low", analysis.get("range_low", entry)))
-            # Use the latest closed candle low as the invalidation point.
-            candles_1h = list(st.candles["1h"])
-            sl = float(candles_1h[-1]["l"]) - atr * 0.15
-            risk = entry - sl
-            if risk > 0:
-                trade_setup = {"status": "BUY CONFIRMED", "side": "BUY", "entry": entry, "stop_loss": sl, "tp1": entry + risk * 2, "tp2": entry + risk * 3, "timeframe": "1h", "reason": "1H lower-liquidity sweep + bullish displacement"}
-        elif analysis.get("upper_sweep") and analysis.get("bear_displacement") and trend != "BULLISH":
-            candles_1h = list(st.candles["1h"])
-            sl = float(candles_1h[-1]["h"]) + atr * 0.15
-            risk = sl - entry
-            if risk > 0:
-                trade_setup = {"status": "SELL CONFIRMED", "side": "SELL", "entry": entry, "stop_loss": sl, "tp1": entry - risk * 2, "tp2": entry - risk * 3, "timeframe": "1h", "reason": "1H upper-liquidity sweep + bearish displacement"}
-        else:
-            trade_setup["reason"] = "No complete 1H sweep + displacement confirmation"
+        trend = analysis.get("local_trend", "NEUTRAL")
+        candles_tf = list(st.candles.get(tf, []))
+        if candles_tf:
+            last_candle = candles_tf[-1]
+            if (analysis.get("lower_sweep") and analysis.get("bull_displacement")
+                    and trend != "BEARISH"):
+                sl = float(last_candle["l"]) - atr * 0.15
+                risk = entry - sl
+                if risk > 0:
+                    trade_setup = {
+                        "status": "BUY CONFIRMED", "side": "BUY",
+                        "entry": entry, "stop_loss": sl,
+                        "tp1": entry + risk * 2, "tp2": entry + risk * 3,
+                        "timeframe": tf,
+                        "reason": f"{tf} lower-liquidity sweep + bullish displacement",
+                    }
+            elif (analysis.get("upper_sweep") and analysis.get("bear_displacement")
+                    and trend != "BULLISH"):
+                sl = float(last_candle["h"]) + atr * 0.15
+                risk = sl - entry
+                if risk > 0:
+                    trade_setup = {
+                        "status": "SELL CONFIRMED", "side": "SELL",
+                        "entry": entry, "stop_loss": sl,
+                        "tp1": entry - risk * 2, "tp2": entry - risk * 3,
+                        "timeframe": tf,
+                        "reason": f"{tf} upper-liquidity sweep + bearish displacement",
+                    }
+                else:
+                    trade_setup["reason"] = "Invalid SELL risk distance; waiting for next setup"
+            else:
+                trade_setup["reason"] = f"No complete {tf} sweep + displacement confirmation"
+    elif not analysis.get("ready"):
+        trade_setup["reason"] = analysis.get("message", f"Waiting for {tf} candle history")
+    else:
+        trade_setup["reason"] = f"ATR data not ready for {tf}"
     vantage_fresh = st.vantage_ts is not None and now_ms() - st.vantage_ts <= 180_000
     exchange_fresh = st.mark_ts is not None and now_ms() - st.mark_ts <= 20_000
     mapped = {
