@@ -749,7 +749,7 @@ async def gold_market_worker() -> None:
             state.index_price = state.mark_price
             state.mark_ts = int(latest["t"]) + 60_000
             state.exchange_prices.append((state.mark_ts, state.mark_price))
-            state.data_source = "XAUS XAU chart (Yahoo Finance proxy; reference feed)"
+            state.data_source = "Yahoo Finance COMEX Gold Futures (GC=F); reference only"
             state.connection_error = None
         except asyncio.CancelledError:
             raise
@@ -779,8 +779,7 @@ async def market_stream_worker() -> None:
         try:
             log.info("Connecting Binance market streams")
             async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=8_000_000) as ws:
-                for st in states.values():
-                    st.connection_error = None
+                states["BTC"].connection_error = None
                 async for raw in ws:
                     packet = json.loads(raw)
                     data = packet.get("data", packet)
@@ -837,8 +836,7 @@ async def market_stream_worker() -> None:
             raise
         except Exception as exc:
             log.exception("Market stream disconnected: %s", exc)
-            for st in states.values():
-                st.connection_error = str(exc)[:180]
+            states["BTC"].connection_error = str(exc)[:180]
             await asyncio.sleep(3)
 
 
