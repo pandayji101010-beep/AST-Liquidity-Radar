@@ -653,7 +653,6 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "adjusted_levels": mapped,
         "reaction_levels": build_reaction_levels(st, tf),
         "a_plus_setups": strategy.get("setups", []),
-        "strategy_lock": strategy.get("direction_lock", {}),
         "structure_timeframes": strategy.get("timeframes", {}),
         "structure_zones": strategy.get("zones", []),
         "liquidity_levels": strategy.get("liquidity", []),
@@ -1032,7 +1031,6 @@ async def scanner() -> dict[str, Any]:
         setups.extend(strategy.get("setups", []))
         asset_data.append({
             "asset": state.key,
-            "direction_lock": strategy.get("direction_lock", {}),
             "timeframes": strategy.get("timeframes", {}),
             "zones": strategy.get("zones", []),
             "liquidity": strategy.get("liquidity", []),
