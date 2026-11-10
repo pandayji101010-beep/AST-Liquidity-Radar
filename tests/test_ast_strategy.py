@@ -85,6 +85,38 @@ class ASTStructureStrategyTests(unittest.TestCase):
         )
         self.assertFalse(early["checks"]["structure_break"])
 
+    def test_opposite_confirmed_entry_is_blocked_by_asset_direction_lock(self):
+        bars = self.make_bars(30)
+        bars[22].update({"o": 104.0, "c": 101.0, "h": 104.4, "l": 100.6})
+        sweeps = [{
+            "bar_index": 20, "time": bars[20]["t"],
+            "type": "UPPER_SWEEP", "side": "SELL", "level": 105.0,
+        }]
+        displacement = [False] * len(bars)
+        displacement[22] = True
+        matching_event = [{
+            "structure": "MAJOR", "event": "BOS", "side": "SELL",
+            "level": 95.0, "time": bars[24]["t"], "bar_index": 24,
+            "displacement": False,
+        }]
+
+        blocked = ASTStructureStrategy._setup_for_timeframe(
+            "1h", bars, sweeps, displacement, matching_event, [],
+            "BEARISH", "BEARISH", "BUY",
+        )
+        self.assertEqual(blocked["status"], "BLOCKED BY BUY LOCK")
+        self.assertIsNone(blocked["side"])
+        self.assertEqual(blocked["candidate_side"], "SELL")
+        self.assertFalse(blocked["checks"]["direction_lock"])
+        self.assertEqual(blocked["score"], 75)
+
+        aligned = ASTStructureStrategy._setup_for_timeframe(
+            "1h", bars, sweeps, displacement, matching_event, [],
+            "BEARISH", "BEARISH", "SELL",
+        )
+        self.assertEqual(aligned["status"], "ENTRY CONFIRMED")
+        self.assertEqual(aligned["side"], "SELL")
+        self.assertTrue(aligned["checks"]["direction_lock"])
     def test_origin_zone_retests_count_visits_not_each_candle(self):
         bars = [
             {"t": i * 60_000, "o": 10.0, "h": 10.5, "l": 9.5, "c": 10.2, "v": 1.0}
