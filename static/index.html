@@ -109,41 +109,38 @@ function renderScanner(setups){
   setups=[...setups].sort((a,b)=>String(a.asset).localeCompare(String(b.asset))||order.indexOf(b.entry_timeframe)-order.indexOf(a.entry_timeframe));
   $('scanner').innerHTML=setups.map(s=>{
     const good=s.status==='ENTRY CONFIRMED';
-    const locked=s.status==='BLOCKED BY BUY LOCK'||s.status==='BLOCKED BY SELL LOCK';
-    const kind=good?'good':(locked?'bad':(['SETUP FORMING','LIQUIDITY SWEPT'].includes(s.status)?'warn':(s.side||s.candidate_side)==='SELL'?'bad':'neutral'));
+    const kind=good?'good':(['SETUP FORMING','LIQUIDITY SWEPT'].includes(s.status)?'warn':(s.direction||s.side||s.candidate_side)==='SELL'?'bad':'neutral');
     const checks=s.checks||{};
-    const checkLabels={liquidity_sweep:'Sweep',displacement:'Displacement',structure_break:'CHOCH / BOS',zone_confluence:'Origin zone',direction_lock:'Direction lock'};
-    const sideKind=s.side==='BUY'?'good':s.side==='SELL'?'bad':'neutral';
-    const lockKind=s.trend_lock==='BUY'?'good':s.trend_lock==='SELL'?'bad':'neutral';
+    const checkLabels={liquidity_sweep:'Sweep',displacement:'Displacement',structure_break:'CHOCH / BOS',zone_confluence:'Origin zone'};
+    const direction=s.side||s.direction||s.candidate_side;
+    const directionColor=direction==='BUY'?'var(--green)':direction==='SELL'?'var(--red)':'var(--text)';
+    const directionLabel=direction||'NEUTRAL';
     const digits=s.asset==='BTC'?1:3;
-    const candidateSide=s.side||s.candidate_side;
-    const directionColor=locked?'var(--red)':candidateSide==='BUY'?'var(--green)':candidateSide==='SELL'?'var(--red)':'var(--text)';
-    const directionLabel=s.side||(locked?`BLOCKED ${s.candidate_side}`:s.candidate_side?`${s.candidate_side} SETUP`:'—');
-    return `<div class="scanner-item"><div class="scanner-head"><div><b>${s.asset}</b> · ${s.entry_timeframe}</div>${tag(s.status,kind)}</div><div class="scanner-head" style="margin-top:8px"><div class="scanner-score" style="color:${directionColor}">${directionLabel} <span class="small">· ${s.score??0}/100</span></div><div>${tag((s.trend_lock||'NEUTRAL')+' LOCK',lockKind)}</div></div><div class="tiny">Major ${s.major_trend||'—'} · Minor ${s.minor_trend||'—'} · Close ${s.price===null||s.price===undefined?'—':n(s.price,digits)}</div><div class="scanner-checks">${Object.entries(checkLabels).filter(([k])=>k!=='direction_lock'||s.side||s.candidate_side).map(([k,label])=>`<span class="check ${checks[k]?'pass':'fail'}">${checks[k]?'✓':'○'} ${label}</span>`).join('')}</div><div class="tiny" style="margin-top:9px">${s.reason||'Waiting for candle data'}</div>${s.sweep_level!==undefined?`<div class="tiny">Swept level: <b>${n(s.sweep_level,digits)}</b></div>`:''}</div>`;
+    return `<div class="scanner-item"><div class="scanner-head"><div><b>${s.asset}</b> · ${s.entry_timeframe}</div>${tag(s.status,kind)}</div><div class="scanner-head" style="margin-top:8px"><div class="scanner-score" style="color:${directionColor}">${directionLabel} <span class="small">· ${s.score??0}/100</span></div></div><div class="tiny">Major ${s.major_trend||'—'} · Minor ${s.minor_trend||'—'} · Close ${s.price===null||s.price===undefined?'—':n(s.price,digits)}</div><div class="scanner-checks">${Object.entries(checkLabels).map(([k,label])=>`<span class="check ${checks[k]?'pass':'fail'}">${checks[k]?'✓':'○'} ${label}</span>`).join('')}</div><div class="tiny" style="margin-top:9px">${s.reason||'Waiting for candle data'}</div>${s.sweep_level!==undefined?`<div class="tiny">Swept level: <b>${n(s.sweep_level,digits)}</b></div>`:''}</div>`;
   }).join('');
 }
+
 function eventLabel(e){return e?`${e.event} ${e.side} @ ${n(e.level,3)}`:'—'}
 function renderStructure(assetData){
   if(!assetData||!assetData.length){$('structure').innerHTML='<div class="empty">Waiting for historical candle data…</div>';return;}
   const tfOrder=['1d','4h','1h','30m','15m','5m','1m'];
   $('structure').innerHTML=assetData.map(asset=>{
-    const lock=asset.direction_lock||{};
-    const lockKind=lock.side==='BUY'?'good':lock.side==='SELL'?'bad':'neutral';
     const tfs=asset.timeframes||{};
     const tfCards=tfOrder.map(tf=>{
       const a=tfs[tf]||{};
       if(!a.ready)return `<div class="structure-tf"><b>${tf.toUpperCase()}</b>${tag('WARMING UP','neutral')}<span class="tiny">${a.bars||0} bars · ${a.message||'waiting'}</span></div>`;
       const majorKind=a.major_trend==='BULLISH'?'good':a.major_trend==='BEARISH'?'bad':'neutral';
       const minorKind=a.minor_trend==='BULLISH'?'good':a.minor_trend==='BEARISH'?'bad':'neutral';
-      return `<div class="structure-tf"><div class="structure-top"><b>${tf.toUpperCase()}</b><span class="tiny">${Number(a.bars).toLocaleString()} bars</span></div><span class="tiny">Major ${tag(a.major_trend||'NEUTRAL',majorKind)}</span><span class="tiny">${eventLabel(a.major_event)}</span><span class="tiny">Minor ${tag(a.minor_trend||'NEUTRAL',minorKind)}</span><span class="tiny">${eventLabel(a.minor_event)}</span><span class="tiny">Setup: <b>${a.setup?.status||'WAIT'}</b> ${a.setup?.side||''}</span><span class="tiny">Sweep: ${a.sweeps?.length?`${a.sweeps[a.sweeps.length-1].type} @ ${n(a.sweeps[a.sweeps.length-1].level,3)}`:'—'}</span></div>`;
+      const direction=a.setup?.direction||'NEUTRAL';
+      const directionKind=direction==='BUY'?'good':direction==='SELL'?'bad':'neutral';
+      return `<div class="structure-tf"><div class="structure-top"><b>${tf.toUpperCase()}</b><span class="tiny">${Number(a.bars).toLocaleString()} bars</span></div><span class="tiny">Direction ${tag(direction,directionKind)}</span><span class="tiny">Major ${tag(a.major_trend||'NEUTRAL',majorKind)}</span><span class="tiny">${eventLabel(a.major_event)}</span><span class="tiny">Minor ${tag(a.minor_trend||'NEUTRAL',minorKind)}</span><span class="tiny">${eventLabel(a.minor_event)}</span><span class="tiny">Setup: <b>${a.setup?.status||'WAIT'}</b></span><span class="tiny">Sweep: ${a.sweeps?.length?`${a.sweeps[a.sweeps.length-1].type} @ ${n(a.sweeps[a.sweeps.length-1].level,3)}`:'—'}</span></div>`;
     }).join('');
     const levels=(asset.liquidity||[]).slice(0,10).map(l=>`<div class="structure-row"><span>${l.timeframe.toUpperCase()} · ${l.name}</span><b>${n(l.price,asset.asset==='BTC'?1:3)}</b></div>`).join('')||'<div class="tiny-muted">Confirmed swing/equal levels are warming up.</div>';
     const zones=(asset.zones||[]).slice(0,10).map(z=>`<div class="structure-row"><span class="${z.side==='BUY'?'zone-buy':'zone-sell'}"><b>${z.side}</b> ${z.asset_timeframe.toUpperCase()} · ${z.retest_stage||z.status} · ${z.strength_atr} ATR</span><b>${n(z.low,asset.asset==='BTC'?1:3)} – ${n(z.high,asset.asset==='BTC'?1:3)}</b></div>`).join('')||'<div class="tiny-muted">No origin zones confirmed yet.</div>';
     const evs=(asset.events||[]).slice(0,6).map(e=>`<div class="structure-row"><span>${e.timeframe.toUpperCase()} · ${e.structure} ${e.event} ${e.side}</span><b>${n(e.level,asset.asset==='BTC'?1:3)}</b></div>`).join('')||'<div class="tiny-muted">No confirmed BOS / CHOCH events yet.</div>';
-    return `<div class="structure-asset"><div class="structure-top"><div><b>${asset.asset}</b><div class="tiny-muted">${lock.reason||'Waiting for structural direction'}${lock.timeframe?' · Lock source '+lock.timeframe.toUpperCase():''}</div></div>${tag((lock.side||'NEUTRAL')+' DIRECTION LOCK',lockKind)}</div><div class="structure-tfs">${tfCards}</div><div class="structure-bottom"><div><div class="section">Historical liquidity · BSL / SSL</div><div class="structure-list">${levels}</div><div class="section">Recent structure events</div><div class="structure-list">${evs}</div></div><div><div class="section">Buyer / seller origin zones · retests</div><div class="structure-list">${zones}</div></div></div></div>`;
+    return `<div class="structure-asset"><div class="structure-top"><div><b>${asset.asset}</b><div class="tiny-muted">Independent timeframe directions · each chart is evaluated on its own candles</div></div>${tag('INDEPENDENT TF MAP','neutral')}</div><div class="structure-tfs">${tfCards}</div><div class="structure-bottom"><div><div class="section">Historical liquidity · BSL / SSL</div><div class="structure-list">${levels}</div><div class="section">Recent structure events</div><div class="structure-list">${evs}</div></div><div><div class="section">Buyer / seller origin zones · retests</div><div class="structure-list">${zones}</div></div></div></div>`;
   }).join('');
 }
-
 function renderEvents(events){
   if(!events.length){$('events').innerHTML='<div class="empty">No confirmed event yet. Radar is collecting data.</div>';return;}
   $('events').innerHTML=events.slice(0,18).map(e=>{
