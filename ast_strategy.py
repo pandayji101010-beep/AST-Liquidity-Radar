@@ -9,6 +9,7 @@ class ASTStructureStrategy:
     """Closed-candle major/minor structure engine with independent asset locks."""
 
     TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
+    LOCK_TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m")
     SEQUENCE_BARS = 12
 
     def __init__(self) -> None:
@@ -386,27 +387,36 @@ class ASTStructureStrategy:
         timeframe_results: dict[str, dict[str, Any]],
         events: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # Asset-wide bias is anchored to confirmed major structure from 15m+.
+        # 1m/5m signals are still scanned, but cannot flip the global lock.
         reversals = [
             item for item in events
-            if item["structure"] == "MAJOR"
+            if item["timeframe"] in self.LOCK_TIMEFRAMES
+            and item["structure"] == "MAJOR"
             and item["event"] == "CHOCH"
             and item.get("displacement")
         ]
-        latest = max(reversals, key=lambda item: (item.get("time") or 0, item["timeframe"]), default=None)
+        latest = max(
+            reversals,
+            key=lambda item: (item.get("time") or 0, self.LOCK_TIMEFRAMES.index(item["timeframe"])),
+            default=None,
+        )
 
         if self._lock_side is None:
             if latest:
                 self._lock_side = latest["side"]
                 self._lock_timeframe = latest["timeframe"]
-                self._lock_reason = "Initialized from latest displacement-backed major CHOCH"
+                self._lock_reason = "Initialized from latest displacement-backed 15m+ major CHOCH"
                 self._last_lock_event_key = (latest["timeframe"], latest.get("time"), latest["side"])
             else:
-                for tf in self.TIMEFRAMES:
+                # Priority is highest timeframe first; lower TFs are only a
+                # fallback when higher-timeframe history is not ready yet.
+                for tf in self.LOCK_TIMEFRAMES:
                     trend = timeframe_results.get(tf, {}).get("major_trend")
                     if trend in ("BULLISH", "BEARISH"):
                         self._lock_side = "BUY" if trend == "BULLISH" else "SELL"
                         self._lock_timeframe = tf
-                        self._lock_reason = f"Initial bias from confirmed {tf.upper()} major structure"
+                        self._lock_reason = f"Initial bias from confirmed {tf.upper()} major structure (15m+ lock)"
                         break
 
         if latest:
@@ -415,7 +425,7 @@ class ASTStructureStrategy:
                 if self._lock_side != latest["side"]:
                     self._lock_side = latest["side"]
                     self._lock_timeframe = latest["timeframe"]
-                    self._lock_reason = "Direction changed only after displacement-backed major CHOCH"
+                    self._lock_reason = "Direction changed only after displacement-backed 15m+ major CHOCH"
                 self._last_lock_event_key = key
 
         return {
@@ -423,7 +433,6 @@ class ASTStructureStrategy:
             "reason": self._lock_reason,
             "timeframe": self._lock_timeframe,
         }
-
     def snapshot(self, candles: dict[str, Any]) -> dict[str, Any]:
         cleaned = {tf: self._clean_bars(candles.get(tf, [])) for tf in self.TIMEFRAMES}
         signature = tuple(
