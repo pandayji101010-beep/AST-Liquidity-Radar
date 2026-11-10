@@ -81,7 +81,7 @@ class ASTStructureStrategyTests(unittest.TestCase):
         early_event = [dict(matching_event[0], bar_index=21)]
         early = ASTStructureStrategy._setup_for_timeframe(
             "5m", bars, sweeps, displacement, early_event, [],
-            "BULLISH", "BULLISH", "BUY",
+            "BULLISH", "BULLISH",
         )
         self.assertFalse(early["checks"]["structure_break"])
 
