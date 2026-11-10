@@ -19,6 +19,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ast_strategy import ASTStructureStrategy
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -109,6 +111,7 @@ class AssetState:
     trend_lock_side: str | None = None
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
+    structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -300,7 +303,7 @@ states: dict[str, AssetState] = {
     key: AssetState(key=key, symbol=symbol) for key, symbol in SYMBOLS.items()
 }
 
-app = FastAPI(title="AST Institutional Liquidity Radar", version="1.0.0")
+app = FastAPI(title="AST Institutional Liquidity Radar", version="2.0.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 http_client: httpx.AsyncClient | None = None
@@ -577,133 +580,22 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
             unique.append(item)
     return unique
 
+def build_structure_snapshot(st: AssetState) -> dict[str, Any]:
+    """Run the cached, closed-candle major/minor structure strategy for one asset."""
+    result = st.structure_engine.snapshot(st.candles)
+    for setup in result.get("setups", []):
+        setup["asset"] = st.key
+    return result
+
+
 def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
-    """One directional lock per asset, with entry opportunities on available lower TFs.
-
-    Higher TFs establish/maintain the directional state. A reversal needs broad
-    higher-TF agreement plus lower-TF structure/momentum confirmation. Scores
-    are heuristic confluence scores, never win probabilities.
-    """
-    macro_tfs = ("1d", "4h", "1h", "30m")
-    weights = {"1d": 4, "4h": 3, "1h": 2, "30m": 1}
-    ready = {tf: st.latest_analysis.get(tf, {}) for tf in TIMEFRAMES}
-    votes = {"BULLISH": 0, "BEARISH": 0}
-    available_weight = 0
-    for tf in macro_tfs:
-        a = ready.get(tf, {})
-        if a.get("ready"):
-            trend = a.get("local_trend")
-            available_weight += weights[tf]
-            if trend in votes:
-                votes[trend] += weights[tf]
-
-    total = max(available_weight, 1)
-    bull_ratio = votes["BULLISH"] / total
-    bear_ratio = votes["BEARISH"] / total
-    macro_candidate = "BUY" if bull_ratio >= 0.62 else "SELL" if bear_ratio >= 0.62 else None
-
-    # Confirm a reversal with 15m trend and a recent 5m/1m structure break
-    # plus displacement. Do not flip merely because of one opposite candle.
-    def lower_reversal(side: str) -> tuple[bool, list[str]]:
-        tf_checks = []
-        for tf in ("15m", "5m", "1m"):
-            a = ready.get(tf, {})
-            if not a.get("ready"):
-                continue
-            if side == "BUY":
-                tf_checks.append(bool(a.get("bull_displacement") or a.get("range_break_up")))
-            else:
-                tf_checks.append(bool(a.get("bear_displacement") or a.get("range_break_down")))
-        return (sum(tf_checks) >= 2, ["15m", "5m", "1m"])
-
-    h15 = ready.get("15m", {})
-    opposite_buy = macro_candidate == "BUY" and h15.get("ready") and h15.get("local_trend") == "BULLISH"
-    opposite_sell = macro_candidate == "SELL" and h15.get("ready") and h15.get("local_trend") == "BEARISH"
-
-    if st.trend_lock_side is None:
-        if macro_candidate and available_weight >= 6:
-            st.trend_lock_side = macro_candidate
-            st.trend_lock_since = now_ms()
-            st.trend_lock_reason = "Initial higher-timeframe consensus"
-    elif macro_candidate and macro_candidate != st.trend_lock_side:
-        confirmed, _ = lower_reversal(macro_candidate)
-        macro_strong = (bull_ratio >= 0.78 if macro_candidate == "BUY" else bear_ratio >= 0.78)
-        htf_confirmed = opposite_buy if macro_candidate == "BUY" else opposite_sell
-        if macro_strong and htf_confirmed and confirmed:
-            st.trend_lock_side = macro_candidate
-            st.trend_lock_since = now_ms()
-            st.trend_lock_reason = "Confirmed multi-timeframe reversal"
-
-    lock = st.trend_lock_side
-    lock_score = round((bull_ratio if lock == "BUY" else bear_ratio if lock == "SELL" else max(bull_ratio, bear_ratio)) * 100)
-    results: list[dict[str, Any]] = []
-    for entry_tf in ("1m", "5m", "15m"):
-        candles = list(st.candles.get(entry_tf, []))
-        a = ready.get(entry_tf, {})
-        if len(candles) < 30 or not a.get("ready"):
-            results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": "WARMING UP",
-                            "side": None, "score": 0, "trend_lock": lock or "NEUTRAL",
-                            "macro_buy": round(bull_ratio*100), "macro_sell": round(bear_ratio*100),
-                            "price": st.mark_price, "reason": f"Collecting {entry_tf} candle history"})
-            continue
-        highs = [float(c["h"]) for c in candles]
-        lows = [float(c["l"]) for c in candles]
-        closes = [float(c["c"]) for c in candles]
-        opens = [float(c["o"]) for c in candles]
-        atr = float(a.get("atr") or 0)
-        # Recent sweep window: last 12 closed candles, each compared only to prior bars.
-        bull_sweep = bear_sweep = False
-        for i in range(max(20, len(candles)-12), len(candles)):
-            prior_hi = max(highs[max(0, i-20):i])
-            prior_lo = min(lows[max(0, i-20):i])
-            bull_sweep |= lows[i] < prior_lo and closes[i] > prior_lo
-            bear_sweep |= highs[i] > prior_hi and closes[i] < prior_hi
-        # Momentum/structure can confirm on any of the latest 3 closed bars.
-        bull_disp = bear_disp = bull_bos = bear_bos = False
-        for j in range(max(1, len(candles)-3), len(candles)):
-            body = abs(closes[j] - opens[j])
-            rng = max(highs[j] - lows[j], 1e-12)
-            if atr:
-                bull_disp |= closes[j] > opens[j] and body >= atr*0.45 and (closes[j]-lows[j])/rng >= 0.68
-                bear_disp |= closes[j] < opens[j] and body >= atr*0.45 and (closes[j]-lows[j])/rng <= 0.32
-            left = max(0, j-7)
-            if j > left:
-                bull_bos |= closes[j] > max(highs[left:j])
-                bear_bos |= closes[j] < min(lows[left:j])
-
-        direction = lock
-        if direction == "BUY":
-            components = {"higher_tf_consensus": bull_ratio >= 0.62, "liquidity_sweep": bull_sweep,
-                          "displacement": bull_disp, "structure_break": bull_bos}
-            setup_score = round(40*int(components["higher_tf_consensus"]) + 20*int(bull_sweep) + 20*int(bull_disp) + 20*int(bull_bos))
-        elif direction == "SELL":
-            components = {"higher_tf_consensus": bear_ratio >= 0.62, "liquidity_sweep": bear_sweep,
-                          "displacement": bear_disp, "structure_break": bear_bos}
-            setup_score = round(40*int(components["higher_tf_consensus"]) + 20*int(bear_sweep) + 20*int(bear_disp) + 20*int(bear_bos))
-        else:
-            components = {"higher_tf_consensus": False, "liquidity_sweep": bull_sweep or bear_sweep,
-                          "displacement": bull_disp or bear_disp, "structure_break": bull_bos or bear_bos}
-            setup_score = 0
-        if direction and setup_score >= 80:
-            status = "ENTRY CONFIRMED"
-        elif direction and setup_score >= 40:
-            status = "SETUP FORMING"
-        elif direction:
-            status = "TREND LOCK ACTIVE"
-        else:
-            status = "NEUTRAL / WAIT"
-        results.append({"asset": st.key, "entry_timeframe": entry_tf, "status": status,
-                        "side": direction, "trend_lock": lock or "NEUTRAL",
-                        "score": setup_score, "lock_score": lock_score,
-                        "macro_buy": round(bull_ratio*100), "macro_sell": round(bear_ratio*100),
-                        "price": closes[-1], "candle_time": int(candles[-1]["t"]),
-                        "checks": components, "reason": st.trend_lock_reason,
-                        "data_ready": True})
-    return results
+    """Backward-compatible route name; now returns all timeframe strategy setups."""
+    return build_structure_snapshot(st).get("setups", [])
 
 
 def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     st = states[key]
+    strategy = build_structure_snapshot(st)
     analysis = st.latest_analysis.get(tf, {"ready": False, "message": "Waiting for candles"})
     scores = calculate_scores(st, tf)
     liqs = st.liquidation_totals()
@@ -757,7 +649,12 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
         "reaction_levels": build_reaction_levels(st, tf),
-        "a_plus_setups": build_a_plus_scanner(st),
+        "a_plus_setups": strategy.get("setups", []),
+        "strategy_lock": strategy.get("direction_lock", {}),
+        "structure_timeframes": strategy.get("timeframes", {}),
+        "structure_zones": strategy.get("zones", []),
+        "liquidity_levels": strategy.get("liquidity", []),
+        "structure_events": strategy.get("events", []),
         "exchange_feed_fresh": exchange_fresh,
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
@@ -1101,8 +998,20 @@ async def vantage_mt5_bridge(request: Request, secret: str | None = Query(defaul
 
 @app.get("/api/scanner")
 async def scanner() -> dict[str, Any]:
-    setups = [item for state in states.values() for item in build_a_plus_scanner(state)]
-    return {"time": now_ms(), "assets": list(states.keys()), "setups": setups}
+    setups: list[dict[str, Any]] = []
+    asset_data: list[dict[str, Any]] = []
+    for state in states.values():
+        strategy = build_structure_snapshot(state)
+        setups.extend(strategy.get("setups", []))
+        asset_data.append({
+            "asset": state.key,
+            "direction_lock": strategy.get("direction_lock", {}),
+            "timeframes": strategy.get("timeframes", {}),
+            "zones": strategy.get("zones", []),
+            "liquidity": strategy.get("liquidity", []),
+            "events": strategy.get("events", []),
+        })
+    return {"time": now_ms(), "assets": list(states.keys()), "setups": setups, "asset_data": asset_data}
 
 
 @app.get("/api/events")
@@ -1119,11 +1028,16 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "trend_lock_mode": "one direction per asset; flips require multi-timeframe reversal confirmation",
+        "strategy": "AST Major/Minor CHOCH + BOS + Liquidity Sweep + Displacement + Origin-Zone Retests",
+        "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
+        "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
         "telegram_configured": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "notes": [
-            "Pressure scores are heuristic indices, not probabilities.",
+            "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
+            "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
+            "Historical depth is controlled by AST_HISTORY_BARS (default 10000 per timeframe); this is bounded history, not unlimited history.",
+            "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
             "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
         ],
