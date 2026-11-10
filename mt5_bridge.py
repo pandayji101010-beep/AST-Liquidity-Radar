@@ -104,8 +104,14 @@ def main() -> int:
 
     try:
         initialise_mt5()
-        btc_symbol = select_symbol(BTC_SYMBOL, "BTC")
+        # GOLD is the requested broker quote. BTC is optional: some Vantage
+        # account types do not expose a crypto CFD symbol.
         gold_symbol = select_symbol(GOLD_SYMBOL, "GOLD")
+        btc_symbol = None
+        try:
+            btc_symbol = select_symbol(BTC_SYMBOL, "BTC")
+        except Exception as exc:
+            log.warning("BTC MT5 quote disabled; GOLD bridge will continue: %s", exc)
     except Exception as exc:
         log.error("MT5 startup failed: %s", exc)
         mt5.shutdown()
@@ -121,7 +127,7 @@ def main() -> int:
     session = requests.Session()
     url = f"{BACKEND_URL}/api/vantage/mt5"
     params = {"secret": BRIDGE_SECRET}
-    symbols = [("BTC", btc_symbol), ("GOLD", gold_symbol)]
+    symbols = ([("BTC", btc_symbol)] if btc_symbol else []) + [("GOLD", gold_symbol)]
     last_sent: dict[str, int] = {}
     last_health_check = 0.0
 
