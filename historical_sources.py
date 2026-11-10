@@ -83,6 +83,7 @@ async def _download_archive(client: httpx.AsyncClient, url: str, semaphore: asyn
 def resample_from_1m(candles: list[dict[str, Any]], timeframe: str, limit: int) -> list[dict[str, Any]]:
     """Aggregate closed 1m candles into UTC-aligned OHLCV bars."""
     duration = TF_MS[timeframe]
+    expected = duration // TF_MS["1m"]
     grouped: dict[int, list[dict[str, Any]]] = {}
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     for candle in candles:
@@ -93,6 +94,8 @@ def resample_from_1m(candles: list[dict[str, Any]], timeframe: str, limit: int) 
 
     result = []
     for bucket, rows in sorted(grouped.items()):
+        if len(rows) < expected:
+            continue  # Do not manufacture a complete HTF bar from missing 1m candles.
         rows.sort(key=lambda item: int(item["t"]))
         result.append({
             "t": bucket,
@@ -221,6 +224,7 @@ async def _gold_chart(
 def _resample_from_source(candles: list[dict[str, Any]], timeframe: str, limit: int) -> list[dict[str, Any]]:
     """Aggregate completed source bars into UTC-aligned bars."""
     duration = TF_MS[timeframe]
+    expected = duration // TF_MS["1h"]
     groups: dict[int, list[dict[str, Any]]] = {}
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     for candle in candles:
@@ -229,6 +233,8 @@ def _resample_from_source(candles: list[dict[str, Any]], timeframe: str, limit: 
             groups.setdefault(bucket, []).append(candle)
     result = []
     for bucket, rows in sorted(groups.items()):
+        if len(rows) < expected:
+            continue  # Gold 4h bars require four completed 1h source bars.
         rows.sort(key=lambda item: int(item["t"]))
         result.append({
             "t": bucket,
