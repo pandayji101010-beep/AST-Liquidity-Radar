@@ -6,17 +6,12 @@ from typing import Any
 
 
 class ASTStructureStrategy:
-    """Closed-candle major/minor structure engine with independent asset locks."""
+    """Closed-candle major/minor structure engine with independent timeframe signals."""
 
     TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
-    LOCK_TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m")
     SEQUENCE_BARS = 12
 
     def __init__(self) -> None:
-        self._lock_side: str | None = None
-        self._lock_reason = "Waiting for confirmed major structure"
-        self._lock_timeframe: str | None = None
-        self._last_lock_event_key: tuple[Any, ...] | None = None
         self._cache_signature: tuple[Any, ...] | None = None
         self._cache_result: dict[str, Any] | None = None
 
@@ -295,8 +290,8 @@ class ASTStructureStrategy:
         zones: list[dict[str, Any]],
         major_trend: str,
         minor_trend: str,
-        lock_side: str,
     ) -> dict[str, Any]:
+        """Evaluate one timeframe in isolation; no other timeframe can block it."""
         current_price = bars[-1]["c"] if bars else None
         start = max(0, len(bars) - ASTStructureStrategy.SEQUENCE_BARS)
         candidates = [item for item in sweeps if item["bar_index"] >= start]
@@ -332,39 +327,41 @@ class ASTStructureStrategy:
                 for zone in zones
             )
 
-        normalised_lock = lock_side if lock_side in ("BUY", "SELL") else "NEUTRAL"
-        lock_ok = side is None or normalised_lock == "NEUTRAL" or side == normalised_lock
-        blocked_by_lock = bool(structure_ok and not lock_ok)
+        # Show this chart's own direction. A fresh sweep takes priority, then
+        # the latest confirmed local structure event, then minor/major trend.
+        latest_event = max(
+            structure_events,
+            key=lambda event: event.get("time") or 0,
+            default=None,
+        )
+        trend = minor_trend if minor_trend not in (None, "NEUTRAL") else major_trend
+        trend_side = "BUY" if trend == "BULLISH" else "SELL" if trend == "BEARISH" else None
+        direction = side or (latest_event.get("side") if latest_event else None) or trend_side
+
         checks = {
             "liquidity_sweep": sweep_ok,
             "displacement": displacement_ok,
             "structure_break": structure_ok,
             "zone_confluence": zone_ok,
-            "direction_lock": lock_ok if side is not None else None,
         }
 
-        if blocked_by_lock:
-            status = f"BLOCKED BY {normalised_lock} LOCK"
-            reason = (
-                f"{side} structure sequence is complete, but the current {normalised_lock} "
-                "direction lock blocks the opposite entry. Wait for a displacement-backed "
-                "major CHOCH before the lock can reverse."
-            )
-        elif structure_ok:
+        if structure_ok:
             status = "ENTRY CONFIRMED"
-            reason = "Directional liquidity sweep -> displacement -> matching BOS/CHOCH confirmed on closed candles and aligned with the asset direction lock."
+            reason = "This timeframe confirmed its own liquidity sweep -> directional displacement -> matching BOS/CHOCH on closed candles."
+            if zone_ok:
+                reason += " Price is also inside an active origin zone (extra confluence)."
         elif displacement_ok:
             status = "SETUP FORMING"
-            reason = "Sweep and directional displacement confirmed; waiting for matching BOS/CHOCH."
+            reason = "This timeframe has its own sweep and directional displacement; waiting for its matching BOS/CHOCH."
         elif sweep_ok:
             status = "LIQUIDITY SWEPT"
-            reason = "Liquidity swept; waiting for directional displacement and structure confirmation."
+            reason = "This timeframe swept liquidity; waiting for its own directional displacement and structure confirmation."
         else:
             status = "WAITING"
-            reason = "Waiting for a confirmed liquidity sweep."
+            reason = "No complete local sweep sequence yet. Direction follows this timeframe's own confirmed structure."
 
-        entry_side = side if structure_ok and not blocked_by_lock else None
-        candidate_side = side if side is not None and entry_side is None else None
+        entry_side = side if structure_ok else None
+        candidate_side = side if side is not None and not structure_ok else None
         score = sum(bool(checks[key]) for key in (
             "liquidity_sweep", "displacement", "structure_break", "zone_confluence"
         )) * 25
@@ -373,65 +370,14 @@ class ASTStructureStrategy:
             "status": status,
             "side": entry_side,
             "candidate_side": candidate_side,
+            "direction": direction,
             "score": score,
-            "trend_lock": normalised_lock,
             "major_trend": major_trend,
             "minor_trend": minor_trend,
             "price": current_price,
             "checks": checks,
             "sweep_level": sweep["level"] if sweep else None,
             "reason": reason,
-        }
-    def _update_direction_lock(
-        self,
-        timeframe_results: dict[str, dict[str, Any]],
-        events: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        # Asset-wide bias is anchored to confirmed major structure from 15m+.
-        # 1m/5m signals are still scanned, but cannot flip the global lock.
-        reversals = [
-            item for item in events
-            if item["timeframe"] in self.LOCK_TIMEFRAMES
-            and item["structure"] == "MAJOR"
-            and item["event"] == "CHOCH"
-            and item.get("displacement")
-        ]
-        latest = max(
-            reversals,
-            key=lambda item: (item.get("time") or 0, self.LOCK_TIMEFRAMES.index(item["timeframe"])),
-            default=None,
-        )
-
-        if self._lock_side is None:
-            if latest:
-                self._lock_side = latest["side"]
-                self._lock_timeframe = latest["timeframe"]
-                self._lock_reason = "Initialized from latest displacement-backed 15m+ major CHOCH"
-                self._last_lock_event_key = (latest["timeframe"], latest.get("time"), latest["side"])
-            else:
-                # Priority is highest timeframe first; lower TFs are only a
-                # fallback when higher-timeframe history is not ready yet.
-                for tf in self.LOCK_TIMEFRAMES:
-                    trend = timeframe_results.get(tf, {}).get("major_trend")
-                    if trend in ("BULLISH", "BEARISH"):
-                        self._lock_side = "BUY" if trend == "BULLISH" else "SELL"
-                        self._lock_timeframe = tf
-                        self._lock_reason = f"Initial bias from confirmed {tf.upper()} major structure (15m+ lock)"
-                        break
-
-        if latest:
-            key = (latest["timeframe"], latest.get("time"), latest["side"])
-            if key != self._last_lock_event_key:
-                if self._lock_side != latest["side"]:
-                    self._lock_side = latest["side"]
-                    self._lock_timeframe = latest["timeframe"]
-                    self._lock_reason = "Direction changed only after displacement-backed 15m+ major CHOCH"
-                self._last_lock_event_key = key
-
-        return {
-            "side": self._lock_side or "NEUTRAL",
-            "reason": self._lock_reason,
-            "timeframe": self._lock_timeframe,
         }
     def snapshot(self, candles: dict[str, Any]) -> dict[str, Any]:
         cleaned = {tf: self._clean_bars(candles.get(tf, [])) for tf in self.TIMEFRAMES}
@@ -481,7 +427,7 @@ class ASTStructureStrategy:
 
             setup = self._setup_for_timeframe(
                 tf, bars, sweeps, displacement, events, zones,
-                major["trend"], minor["trend"], self._lock_side or "NEUTRAL",
+                major["trend"], minor["trend"],
             )
 
             def ui_event(event):
@@ -497,7 +443,7 @@ class ASTStructureStrategy:
                 "major_trend": major["trend"], "minor_trend": minor["trend"],
                 "major_event": ui_event(major["latest_event"]),
                 "minor_event": ui_event(minor["latest_event"]),
-                "setup": {"status": setup["status"], "side": setup["side"] or setup["candidate_side"], "score": setup["score"]},
+                "setup": {"status": setup["status"], "side": setup["side"] or setup["candidate_side"], "direction": setup["direction"], "score": setup["score"]},
                 "sweeps": [
                     {"type": item["type"], "side": item["side"], "level": item["level"], "time": item["time"]}
                     for item in sweeps[-5:]
@@ -506,28 +452,25 @@ class ASTStructureStrategy:
             internals[tf] = {
                 "bars": bars, "atr": atr, "displacement": displacement,
                 "sweeps": sweeps, "events": events, "major": major, "minor": minor,
+                "zones": zones, "setup": setup,
             }
 
-        lock = self._update_direction_lock(timeframe_results, all_events)
+        # Each timeframe keeps the setup calculated from its own candles.
+        # No asset-wide direction lock or cross-timeframe voting is applied.
         setups = []
         for tf in self.TIMEFRAMES:
             data = internals[tf]
             if data is None:
                 continue
-            setup = self._setup_for_timeframe(
-                tf, data["bars"], data["sweeps"], data["displacement"],
-                data["events"], [z for z in all_zones if z["asset_timeframe"] == tf],
-                data["major"]["trend"], data["minor"]["trend"], lock["side"],
-            )
+            setup = data["setup"]
             setups.append(setup)
             timeframe_results[tf]["setup"] = {
                 "status": setup["status"],
                 "side": setup["side"] or setup["candidate_side"],
+                "direction": setup["direction"],
                 "score": setup["score"],
             }
-
         result = {
-            "direction_lock": lock,
             "timeframes": timeframe_results,
             "zones": sorted(all_zones, key=lambda item: item.get("created_time") or 0, reverse=True)[:20],
             "liquidity": all_liquidity[-80:],
