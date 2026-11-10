@@ -283,10 +283,13 @@ async def load_gold_history(client: httpx.AsyncClient, limit: int = 10_000) -> d
 
 async def load_gold_live(client: httpx.AsyncClient) -> dict[str, Any]:
     """Refresh recent COMEX gold futures candles; these are delayed/reference market bars."""
-    one_minute = await _gold_chart(client, "5d", "1m", "1m")
+    one_minute, daily = await asyncio.gather(
+        _gold_chart(client, "5d", "1m", "1m"),
+        _gold_chart(client, "5d", "1d", "1d"),
+    )
     if not one_minute:
         raise RuntimeError("Yahoo GC=F chart returned no recent 1m candles")
-    data = {"1m": one_minute}
-    for tf in ("5m", "15m", "30m", "1h", "4h", "1d"):
+    data = {"1m": one_minute, "1d": daily}
+    for tf in ("5m", "15m", "30m", "1h", "4h"):
         data[tf] = resample_from_1m(one_minute, tf, 10_000)
     return {"candles": data, "latest": one_minute[-1]}
