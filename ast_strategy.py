@@ -216,17 +216,28 @@ class ASTStructureStrategy:
         bars: list[dict[str, Any]],
         events: list[dict[str, Any]],
         atr: list[float],
+        displacements: list[bool],
         limit: int = 12,
     ) -> list[dict[str, Any]]:
         zones = []
         seen = set()
         for event in sorted(events, key=lambda item: item["bar_index"]):
-            if not event.get("displacement"):
-                continue
             event_index = int(event["bar_index"])
             side = event["side"]
+
+            # The origin belongs to the impulse preceding the structure break.
+            impulse_index = event_index if event.get("displacement") else None
+            if impulse_index is None:
+                for index in range(event_index - 1, max(-1, event_index - 9), -1):
+                    aligned = bars[index]["c"] > bars[index]["o"] if side == "BUY" else bars[index]["c"] < bars[index]["o"]
+                    if displacements[index] and aligned:
+                        impulse_index = index
+                        break
+            if impulse_index is None:
+                continue
+
             origin_index = None
-            for index in range(event_index - 1, max(-1, event_index - 9), -1):
+            for index in range(impulse_index - 1, max(-1, impulse_index - 9), -1):
                 bar = bars[index]
                 opposite = bar["c"] < bar["o"] if side == "BUY" else bar["c"] > bar["o"]
                 if opposite:
@@ -262,8 +273,8 @@ class ASTStructureStrategy:
                 "3RD+ RETEST" if retests >= 3 else
                 f"{retests} RETEST" if retests else "FRESH"
             )
-            average = atr[event_index] if event_index < len(atr) else 0.0
-            body = abs(bars[event_index]["c"] - bars[event_index]["o"])
+            average = atr[impulse_index] if impulse_index < len(atr) else 0.0
+            body = abs(bars[impulse_index]["c"] - bars[impulse_index]["o"])
             zones.append({
                 "side": side, "asset_timeframe": timeframe,
                 "low": low, "high": high, "origin_time": origin["t"],
@@ -440,7 +451,7 @@ class ASTStructureStrategy:
 
             liquidity = self._liquidity_levels(tf, major, minor, atr[-1] if atr else 0.0)
             all_liquidity.extend(liquidity)
-            zones = self._build_zones(tf, bars, events, atr)
+            zones = self._build_zones(tf, bars, events, atr, displacement)
             all_zones.extend(zones)
 
             setup = self._setup_for_timeframe(
