@@ -108,6 +108,37 @@ def resample_from_1m(candles: list[dict[str, Any]], timeframe: str, limit: int) 
     return result[-limit:]
 
 
+async def _load_interval_archive(
+    client: httpx.AsyncClient,
+    symbol: str,
+    timeframe: str,
+    completed_months: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Load a longer native-interval archive plus this month's published daily files."""
+    now = datetime.now(timezone.utc)
+    urls = []
+    for month in _previous_months(now, completed_months):
+        label = month.strftime("%Y-%m")
+        name = f"{symbol}-{timeframe}-{label}.zip"
+        urls.append(f"{BINANCE_ARCHIVE}/monthly/klines/{symbol}/{timeframe}/{name}")
+
+    day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while day.date() < now.date():
+        label = day.strftime("%Y-%m-%d")
+        name = f"{symbol}-{timeframe}-{label}.zip"
+        urls.append(f"{BINANCE_ARCHIVE}/daily/klines/{symbol}/{timeframe}/{name}")
+        day += timedelta(days=1)
+
+    semaphore = asyncio.Semaphore(6)
+    pages = await asyncio.gather(*(_download_archive(client, url, semaphore) for url in urls))
+    by_time: dict[int, dict[str, Any]] = {}
+    for page in pages:
+        for candle in page:
+            by_time[int(candle["t"])] = candle
+    return [by_time[key] for key in sorted(by_time)][-limit:]
+
+
 async def load_btc_um_history(
     client: httpx.AsyncClient,
     symbol: str = "BTCUSDT",
@@ -139,15 +170,23 @@ async def load_btc_um_history(
     if len(one_minute) < 30:
         raise RuntimeError(f"Binance public archive returned only {len(one_minute)} BTC 1m bars")
 
+    # Use native higher-timeframe archives for deeper swing context. The
+    # shorter intervals are still aggregated from the recent 1m sequence.
+    four_hour, daily = await asyncio.gather(
+        _load_interval_archive(client, symbol, "4h", 12, limit),
+        _load_interval_archive(client, symbol, "1d", 36, limit),
+    )
     data = {"1m": one_minute[-limit:]}
-    for tf in ("5m", "15m", "30m", "1h", "4h", "1d"):
+    for tf in ("5m", "15m", "30m", "1h"):
         data[tf] = resample_from_1m(one_minute, tf, limit)
+    data["4h"] = four_hour or resample_from_1m(one_minute, "4h", limit)
+    data["1d"] = daily or resample_from_1m(one_minute, "1d", limit)
 
     counts = {tf: len(rows) for tf, rows in data.items()}
     log.info("BTC historical archive loaded: %s", counts)
     return {
         "candles": data,
-        "source": "Binance public USD-M Futures archive (BTCUSDT 1m; higher TFs aggregated)",
+        "source": "Binance public USD-M Futures archives (BTCUSDT; 1m lower-TF aggregation, native 4h/1d archives)",
         "bars": counts,
     }
 
