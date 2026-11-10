@@ -841,7 +841,7 @@ async def market_stream_worker() -> None:
 
 
 async def depth_stream_worker() -> None:
-    streams = [f"{states[\"BTC\"].symbol.lower()}@depth20@100ms"]
+    streams = [f"{states['BTC'].symbol.lower()}@depth20@100ms"]
     url = PUBLIC_WS_BASE + "?streams=" + "/".join(streams)
     while True:
         try:
