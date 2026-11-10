@@ -331,15 +331,27 @@ class ASTStructureStrategy:
                 for zone in zones
             )
 
+        normalised_lock = lock_side if lock_side in ("BUY", "SELL") else "NEUTRAL"
+        lock_ok = side is None or normalised_lock == "NEUTRAL" or side == normalised_lock
+        blocked_by_lock = bool(structure_ok and not lock_ok)
         checks = {
             "liquidity_sweep": sweep_ok,
             "displacement": displacement_ok,
             "structure_break": structure_ok,
             "zone_confluence": zone_ok,
+            "direction_lock": lock_ok if side is not None else None,
         }
-        if structure_ok:
+
+        if blocked_by_lock:
+            status = f"BLOCKED BY {normalised_lock} LOCK"
+            reason = (
+                f"{side} structure sequence is complete, but the current {normalised_lock} "
+                "direction lock blocks the opposite entry. Wait for a displacement-backed "
+                "major CHOCH before the lock can reverse."
+            )
+        elif structure_ok:
             status = "ENTRY CONFIRMED"
-            reason = "Directional liquidity sweep -> displacement -> matching BOS/CHOCH confirmed on closed candles."
+            reason = "Directional liquidity sweep -> displacement -> matching BOS/CHOCH confirmed on closed candles and aligned with the asset direction lock."
         elif displacement_ok:
             status = "SETUP FORMING"
             reason = "Sweep and directional displacement confirmed; waiting for matching BOS/CHOCH."
@@ -350,13 +362,18 @@ class ASTStructureStrategy:
             status = "WAITING"
             reason = "Waiting for a confirmed liquidity sweep."
 
+        entry_side = side if structure_ok and not blocked_by_lock else None
+        candidate_side = side if side is not None and entry_side is None else None
+        score = sum(bool(checks[key]) for key in (
+            "liquidity_sweep", "displacement", "structure_break", "zone_confluence"
+        )) * 25
         return {
             "entry_timeframe": timeframe,
             "status": status,
-            "side": side if structure_ok else None,
-            "candidate_side": side if side is not None and not structure_ok else None,
-            "score": sum(bool(value) for value in checks.values()) * 25,
-            "trend_lock": lock_side or "NEUTRAL",
+            "side": entry_side,
+            "candidate_side": candidate_side,
+            "score": score,
+            "trend_lock": normalised_lock,
             "major_trend": major_trend,
             "minor_trend": minor_trend,
             "price": current_price,
@@ -364,7 +381,6 @@ class ASTStructureStrategy:
             "sweep_level": sweep["level"] if sweep else None,
             "reason": reason,
         }
-
     def _update_direction_lock(
         self,
         timeframe_results: dict[str, dict[str, Any]],
