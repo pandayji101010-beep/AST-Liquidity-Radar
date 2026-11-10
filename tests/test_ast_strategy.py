@@ -85,6 +85,39 @@ class ASTStructureStrategyTests(unittest.TestCase):
         )
         self.assertFalse(early["checks"]["structure_break"])
 
+    def test_asset_lock_ignores_ltf_choch_but_reverses_on_15m_major_choch(self):
+        strategy = ASTStructureStrategy()
+        trends = {
+            "1d": {"major_trend": "BEARISH"},
+            "4h": {"major_trend": "BULLISH"},
+            "1h": {"major_trend": "BULLISH"},
+            "30m": {"major_trend": "BULLISH"},
+            "15m": {"major_trend": "BULLISH"},
+            "5m": {"major_trend": "BULLISH"},
+            "1m": {"major_trend": "BULLISH"},
+        }
+        ltf_reversal = [{
+            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
+            "timeframe": "1m", "time": 500, "displacement": True,
+        }]
+        lock = strategy._update_direction_lock(trends, ltf_reversal)
+        self.assertEqual(lock["side"], "SELL")
+        self.assertEqual(lock["timeframe"], "1d")
+
+        newer_ltf_reversal = [{
+            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
+            "timeframe": "5m", "time": 900, "displacement": True,
+        }]
+        lock = strategy._update_direction_lock(trends, newer_ltf_reversal)
+        self.assertEqual(lock["side"], "SELL")
+
+        htf_reversal = [{
+            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
+            "timeframe": "15m", "time": 1_000, "displacement": True,
+        }]
+        lock = strategy._update_direction_lock(trends, htf_reversal)
+        self.assertEqual(lock["side"], "BUY")
+        self.assertEqual(lock["timeframe"], "15m")
     def test_opposite_confirmed_entry_is_blocked_by_asset_direction_lock(self):
         bars = self.make_bars(30)
         bars[22].update({"o": 104.0, "c": 101.0, "h": 104.4, "l": 100.6})
