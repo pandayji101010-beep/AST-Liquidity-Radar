@@ -26,8 +26,8 @@ class ASTStructureStrategyTests(unittest.TestCase):
         result = ASTStructureStrategy().snapshot(candles)
 
         self.assertEqual(set(result["timeframes"]), set(ASTStructureStrategy.TIMEFRAMES))
-        self.assertIsInstance(result["direction_lock"], dict)
-        self.assertIn("side", result["direction_lock"])
+        self.assertNotIn("direction_lock", result)
+        self.assertNotIn("direction_lock", result["setups"][0]["checks"])
         self.assertTrue(result["setups"])
 
         for tf, state in result["timeframes"].items():
@@ -64,7 +64,7 @@ class ASTStructureStrategyTests(unittest.TestCase):
         }]
         valid = ASTStructureStrategy._setup_for_timeframe(
             "5m", bars, sweeps, displacement, matching_event, [],
-            "BULLISH", "BULLISH", "BUY",
+            "BULLISH", "BULLISH",
         )
         self.assertEqual(valid["status"], "ENTRY CONFIRMED")
         self.assertTrue(valid["checks"]["structure_break"])
@@ -85,71 +85,47 @@ class ASTStructureStrategyTests(unittest.TestCase):
         )
         self.assertFalse(early["checks"]["structure_break"])
 
-    def test_asset_lock_ignores_ltf_choch_but_reverses_on_15m_major_choch(self):
-        strategy = ASTStructureStrategy()
-        trends = {
-            "1d": {"major_trend": "BEARISH"},
-            "4h": {"major_trend": "BULLISH"},
-            "1h": {"major_trend": "BULLISH"},
-            "30m": {"major_trend": "BULLISH"},
-            "15m": {"major_trend": "BULLISH"},
-            "5m": {"major_trend": "BULLISH"},
-            "1m": {"major_trend": "BULLISH"},
-        }
-        ltf_reversal = [{
-            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
-            "timeframe": "1m", "time": 500, "displacement": True,
-        }]
-        lock = strategy._update_direction_lock(trends, ltf_reversal)
-        self.assertEqual(lock["side"], "SELL")
-        self.assertEqual(lock["timeframe"], "1d")
-
-        newer_ltf_reversal = [{
-            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
-            "timeframe": "5m", "time": 900, "displacement": True,
-        }]
-        lock = strategy._update_direction_lock(trends, newer_ltf_reversal)
-        self.assertEqual(lock["side"], "SELL")
-
-        htf_reversal = [{
-            "structure": "MAJOR", "event": "CHOCH", "side": "BUY",
-            "timeframe": "15m", "time": 1_000, "displacement": True,
-        }]
-        lock = strategy._update_direction_lock(trends, htf_reversal)
-        self.assertEqual(lock["side"], "BUY")
-        self.assertEqual(lock["timeframe"], "15m")
-    def test_opposite_confirmed_entry_is_blocked_by_asset_direction_lock(self):
+    def test_opposite_timeframes_can_confirm_opposite_directions(self):
         bars = self.make_bars(30)
-        bars[22].update({"o": 104.0, "c": 101.0, "h": 104.4, "l": 100.6})
-        sweeps = [{
-            "bar_index": 20, "time": bars[20]["t"],
+        buy_bars = [dict(row) for row in bars]
+        sell_bars = [dict(row) for row in bars]
+        sell_bars[22].update({"o": 104.0, "c": 101.0, "h": 104.4, "l": 100.6})
+
+        buy_sweeps = [{
+            "bar_index": 20, "time": buy_bars[20]["t"],
+            "type": "LOWER_SWEEP", "side": "BUY", "level": 95.0,
+        }]
+        sell_sweeps = [{
+            "bar_index": 20, "time": sell_bars[20]["t"],
             "type": "UPPER_SWEEP", "side": "SELL", "level": 105.0,
         }]
-        displacement = [False] * len(bars)
-        displacement[22] = True
-        matching_event = [{
+        displacement_buy = [False] * len(buy_bars)
+        displacement_sell = [False] * len(sell_bars)
+        displacement_buy[22] = True
+        displacement_sell[22] = True
+        buy_event = [{
+            "structure": "MINOR", "event": "CHOCH", "side": "BUY",
+            "level": 105.0, "time": buy_bars[24]["t"], "bar_index": 24,
+        }]
+        sell_event = [{
             "structure": "MAJOR", "event": "BOS", "side": "SELL",
-            "level": 95.0, "time": bars[24]["t"], "bar_index": 24,
-            "displacement": False,
+            "level": 95.0, "time": sell_bars[24]["t"], "bar_index": 24,
         }]
 
-        blocked = ASTStructureStrategy._setup_for_timeframe(
-            "1h", bars, sweeps, displacement, matching_event, [],
-            "BEARISH", "BEARISH", "BUY",
+        five_min_sell = ASTStructureStrategy._setup_for_timeframe(
+            "5m", sell_bars, sell_sweeps, displacement_sell, sell_event, [],
+            "BEARISH", "BEARISH",
         )
-        self.assertEqual(blocked["status"], "BLOCKED BY BUY LOCK")
-        self.assertIsNone(blocked["side"])
-        self.assertEqual(blocked["candidate_side"], "SELL")
-        self.assertFalse(blocked["checks"]["direction_lock"])
-        self.assertEqual(blocked["score"], 75)
-
-        aligned = ASTStructureStrategy._setup_for_timeframe(
-            "1h", bars, sweeps, displacement, matching_event, [],
-            "BEARISH", "BEARISH", "SELL",
+        fifteen_min_buy = ASTStructureStrategy._setup_for_timeframe(
+            "15m", buy_bars, buy_sweeps, displacement_buy, buy_event, [],
+            "BULLISH", "BULLISH",
         )
-        self.assertEqual(aligned["status"], "ENTRY CONFIRMED")
-        self.assertEqual(aligned["side"], "SELL")
-        self.assertTrue(aligned["checks"]["direction_lock"])
+        self.assertEqual(five_min_sell["status"], "ENTRY CONFIRMED")
+        self.assertEqual(five_min_sell["side"], "SELL")
+        self.assertEqual(fifteen_min_buy["status"], "ENTRY CONFIRMED")
+        self.assertEqual(fifteen_min_buy["side"], "BUY")
+        self.assertNotIn("direction_lock", five_min_sell["checks"])
+        self.assertNotIn("direction_lock", fifteen_min_buy["checks"])
     def test_origin_zone_retests_count_visits_not_each_candle(self):
         bars = [
             {"t": i * 60_000, "o": 10.0, "h": 10.5, "l": 9.5, "c": 10.2, "v": 1.0}
