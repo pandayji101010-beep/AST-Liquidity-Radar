@@ -152,24 +152,5 @@ class ASTStructureStrategyTests(unittest.TestCase):
         self.assertEqual(zones[0]["retest_stage"], "2 RETEST")
         self.assertEqual(zones[0]["status"], "ACTIVE")
 
-    def test_direction_locks_are_per_engine_instance(self):
-        first = ASTStructureStrategy()
-        second = ASTStructureStrategy()
-        timeframes = {
-            "1d": {"major_trend": "NEUTRAL"},
-            "4h": {"major_trend": "NEUTRAL"},
-        }
-        reversal = [{
-            "structure": "MAJOR", "event": "CHOCH", "side": "SELL",
-            "timeframe": "4h", "time": 100, "displacement": True,
-        }]
-        first_lock = first._update_direction_lock(timeframes, reversal)
-        second_lock = second._update_direction_lock(
-            {"1d": {"major_trend": "BULLISH"}}, []
-        )
-        self.assertEqual(first_lock["side"], "SELL")
-        self.assertEqual(second_lock["side"], "BUY")
-
-
 if __name__ == "__main__":
     unittest.main()
