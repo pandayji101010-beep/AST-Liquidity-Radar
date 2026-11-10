@@ -1,2 +1,78 @@
-# AST-Liquidity-Radar
-Its radar system
+# AST Liquidity Radar
+
+## Historical data sources
+
+- BTC uses Binance USD-M Futures public archives and the live Binance Futures stream.
+- GOLD historical/reference candles use Yahoo Finance COMEX continuous gold futures (GC=F). This is a reference series, not the Vantage XAUUSD CFD price.
+- The Vantage MT5 bridge can forward broker bid/ask/last ticks to the dashboard. It is a read-only quote bridge; it does not place or manage trades.
+
+## Enable Vantage XAUUSD live quote mapping
+
+The Vantage MT5 bridge cannot run inside the Render web service or on GitHub Actions. It must run on a Windows PC or Windows VPS where the Vantage MetaTrader 5 desktop terminal is installed and logged in.
+
+### 1. Configure the Render secret
+
+1. Generate a strong random secret on the Windows PC:
+   \`python -c "import secrets; print(secrets.token_urlsafe(32))"\`
+2. Open the Render web service for AST Liquidity Radar.
+3. Go to **Environment** and add:
+   - Key: \`VANTAGE_BRIDGE_SECRET\`
+   - Value: the generated secret
+4. Save the environment change and let Render redeploy.
+5. Do not put this value in GitHub, a committed file, or a screenshot.
+
+### 2. Prepare the Windows MT5 terminal
+
+1. Install the Vantage MetaTrader 5 desktop terminal and sign in to the intended Vantage account (demo or live).
+2. Open **Market Watch** and make sure the broker's XAUUSD instrument is visible and receiving quotes.
+3. Check the exact broker symbol. It may be \`XAUUSD\`, \`XAUUSD.\`, \`XAUUSDm\`, or another account-specific suffix. Use the exact spelling shown by the terminal.
+4. Keep the terminal logged in and connected.
+
+### 3. Install and configure the local bridge
+
+From a terminal in the repository folder, run:
+
+\`\`\`powershell
+py -m pip install -r requirements-bridge.txt
+\`\`\`
+
+Create a local \`.env\` file in the repository folder. Do not commit or upload it:
+
+\`\`\`dotenv
+AST_BACKEND_URL=https://ast-liquidity-radar.onrender.com
+VANTAGE_BRIDGE_SECRET=PASTE_THE_SAME_SECRET_USED_IN_RENDER
+MT5_GOLD_SYMBOL=XAUUSD
+MT5_BTC_SYMBOL=BTCUSD
+MT5_PRICE_SIDE=bid
+MT5_POLL_SECONDS=0.5
+\`\`\`
+
+Replace \`MT5_GOLD_SYMBOL\` with the exact symbol visible in Vantage Market Watch. Replace \`MT5_BTC_SYMBOL\` if your account exposes BTC under another name; BTC is optional, so a missing BTC symbol does not stop the GOLD bridge.
+
+Start the read-only quote forwarder:
+
+\`\`\`powershell
+py mt5_bridge.py
+\`\`\`
+
+Keep this process and the MT5 terminal running. For continuous 24/7 quotes, use a Windows VPS with MT5 kept connected.
+
+### 4. Verify the connection
+
+Open:
+
+- \`https://ast-liquidity-radar.onrender.com/api/health\`
+- \`https://ast-liquidity-radar.onrender.com/api/snapshot?timeframe=5m\`
+
+Health should report \`vantage_mt5_bridge_secret_configured: true\`. In the snapshot, check \`vantage_feed_fresh\`, \`vantage_age_seconds\`, and \`basis_samples\`. The dashboard quote mapping becomes available after fresh ticks are received and enough timestamp-matched samples have been collected.
+
+### Troubleshooting
+
+- **Invalid bridge secret / HTTP 401:** the local \`.env\` secret and Render \`VANTAGE_BRIDGE_SECRET\` must match exactly.
+- **HTTP 503:** set the Render environment variable and wait for its redeploy.
+- **MT5 initialize failed:** open the Vantage desktop terminal, sign in, and check that it is connected.
+- **XAUUSD not found:** use the exact symbol name shown in Market Watch.
+- **No tick for GOLD:** check market session, Market Watch visibility, and whether Vantage is streaming quotes.
+- **Vantage feed stale:** keep the bridge process and terminal running; confirm the backend URL and network access.
+
+Never share the bridge secret in chat or commit it to the repository.
