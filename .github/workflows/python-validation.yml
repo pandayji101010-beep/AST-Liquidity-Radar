@@ -17,6 +17,6 @@ jobs:
       - name: Install application dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python modules
-        run: python -m compileall -q main.py ast_strategy.py historical_sources.py
+        run: python -m compileall -q main.py ast_strategy.py historical_sources.py mt5_bridge.py
       - name: Run historical source tests
         run: python -m unittest discover -s tests -v
