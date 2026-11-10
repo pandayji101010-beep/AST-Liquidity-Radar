@@ -87,6 +87,7 @@ class ASTStructureStrategyTests(unittest.TestCase):
 
     def test_opposite_confirmed_entry_is_blocked_by_asset_direction_lock(self):
         bars = self.make_bars(30)
+        bars[22].update({"o": 104.0, "c": 101.0, "h": 104.4, "l": 100.6})
         sweeps = [{
             "bar_index": 20, "time": bars[20]["t"],
             "type": "UPPER_SWEEP", "side": "SELL", "level": 105.0,
