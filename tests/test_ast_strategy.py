@@ -73,7 +73,7 @@ class ASTStructureStrategyTests(unittest.TestCase):
         opposite_event = [dict(matching_event[0], side="SELL")]
         invalid = ASTStructureStrategy._setup_for_timeframe(
             "5m", bars, sweeps, displacement, opposite_event, [],
-            "BULLISH", "BULLISH", "BUY",
+            "BULLISH", "BULLISH",
         )
         self.assertEqual(invalid["status"], "SETUP FORMING")
         self.assertFalse(invalid["checks"]["structure_break"])
