@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
+from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -33,7 +34,7 @@ log = logging.getLogger("AST-Liquidity-Radar")
 REST_BASE = "https://fapi.binance.com"
 MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
-SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
+SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSD"}
 TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 HISTORY_BARS = int(os.getenv("AST_HISTORY_BARS", "10000"))
 BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
@@ -112,6 +113,7 @@ class AssetState:
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
+    data_source: str | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -616,6 +618,7 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     return {
         "asset": key,
         "exchange_symbol": st.symbol,
+        "historical_source": st.data_source,
         "exchange_price": st.mark_price,
         "index_price": st.index_price,
         "funding_rate": st.funding_rate,
@@ -667,75 +670,97 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
 
 
 async def bootstrap_market_data() -> None:
-    """Load recent closed candles and initial mark/OI history before live streams start."""
+    """Load candles from venue-appropriate public archives before live streams start."""
     assert http_client is not None
+
     for key, state in states.items():
         try:
-            premium = await http_client.get(f"{REST_BASE}/fapi/v1/premiumIndex", params={"symbol": state.symbol}, timeout=10.0)
-            premium.raise_for_status()
-            p = premium.json()
-            state.mark_price = safe_float(p.get("markPrice"))
-            state.index_price = safe_float(p.get("indexPrice"))
-            state.funding_rate = safe_float(p.get("lastFundingRate"))
-            state.next_funding_time = int(p.get("nextFundingTime", 0)) or None
-            state.mark_ts = int(p.get("time", now_ms()))
-            if state.mark_price:
-                state.exchange_prices.append((state.mark_ts, state.mark_price))
-        except Exception as exc:
-            log.warning("Initial premium index bootstrap failed for %s: %s", key, exc)
+            if key == "BTC":
+                # Use official Binance USD-M archive rather than the geo-restricted
+                # Futures REST host. Archive rows are real futures klines.
+                loaded = await load_btc_um_history(http_client, state.symbol, HISTORY_BARS)
+                state.data_source = loaded["source"]
+            else:
+                # XAUUSD is not a Binance USD-M symbol. Use a separate gold
+                # reference series and keep Vantage MT5 as the broker-price bridge.
+                loaded = await load_gold_history(http_client, HISTORY_BARS)
+                state.data_source = loaded["source"]
 
-        for tf in TIMEFRAMES:
-            try:
-                # Binance klines endpoint caps each page at 1500. Walk backwards
-                # in time, then restore chronological order for analysis/backtests.
-                collected: list[list[Any]] = []
-                end_time = None
-                remaining = HISTORY_BARS
-                while remaining > 0:
-                    page_limit = min(1500, remaining)
-                    params = {"symbol": state.symbol, "interval": tf, "limit": page_limit}
-                    if end_time is not None:
-                        params["endTime"] = end_time
-                    response = await http_client.get(f"{REST_BASE}/fapi/v1/klines", params=params, timeout=15.0)
-                    response.raise_for_status()
-                    rows = response.json()
-                    if not rows:
-                        break
-                    collected = rows + collected
-                    remaining -= len(rows)
-                    first_open = int(rows[0][0])
-                    if len(rows) < page_limit:
-                        break
-                    end_time = first_open - 1
-                    await asyncio.sleep(0.08)
-                closed = [row for row in collected if int(row[6]) < now_ms()]
-                for row in closed[-HISTORY_BARS:]:
-                    state.candles[tf].append({"t": int(row[0]), "o": float(row[1]), "h": float(row[2]),
-                                              "l": float(row[3]), "c": float(row[4]), "v": float(row[5])})
+            for tf in TIMEFRAMES:
+                rows = loaded["candles"].get(tf, [])
+                state.candles[tf].clear()
+                state.candles[tf].extend(rows[-HISTORY_BARS:])
                 state.latest_analysis[tf] = state.analyse(tf)
-                log.info("Loaded %s historical candles for %s %s", len(state.candles[tf]), key, tf)
-            except Exception as exc:
-                log.warning("Candle bootstrap failed for %s %s: %s", key, tf, exc)
+                log.info("Loaded %s historical candles for %s %s from %s",
+                         len(state.candles[tf]), key, tf, state.data_source)
 
+            one_minute = list(state.candles.get("1m", []))
+            if one_minute:
+                latest = one_minute[-1]
+                state.mark_price = float(latest["c"])
+                state.index_price = state.mark_price
+                state.mark_ts = int(latest["t"]) + 60_000
+                state.exchange_prices.append((state.mark_ts, state.mark_price))
+
+        except Exception as exc:
+            state.connection_error = f"Historical data load failed: {str(exc)[:160]}"
+            log.exception("Historical data bootstrap failed for %s", key)
+
+    # Binance Futures open-interest history is only meaningful for BTCUSDT here.
+    btc = states.get("BTC")
+    if btc:
         try:
-            oi_hist = await http_client.get(
+            response = await http_client.get(
                 f"{REST_BASE}/futures/data/openInterestHist",
-                params={"symbol": state.symbol, "period": "5m", "limit": 30},
+                params={"symbol": btc.symbol, "period": "5m", "limit": 30},
                 timeout=10.0,
             )
-            oi_hist.raise_for_status()
-            for row in oi_hist.json():
+            response.raise_for_status()
+            for row in response.json():
                 ts = int(row.get("timestamp", 0))
-                oi_value = safe_float(row.get("sumOpenInterest"))
-                if ts and oi_value is not None:
-                    state.oi_history.append((ts, oi_value))
+                value = safe_float(row.get("sumOpenInterest"))
+                if ts and value is not None:
+                    btc.oi_history.append((ts, value))
         except Exception as exc:
-            log.warning("OI history bootstrap failed for %s: %s", key, exc)
+            log.warning("BTC OI history bootstrap unavailable: %s", exc)
 
+
+async def gold_market_worker() -> None:
+    """Refresh GOLD reference candles from XAUS; never present them as broker fills."""
+    assert http_client is not None
+    state = states["GOLD"]
+    while True:
+        try:
+            loaded = await load_gold_live(http_client)
+            data = loaded["candles"]
+            for tf, rows in data.items():
+                if tf not in state.candles:
+                    continue
+                merged = {int(item["t"]): item for item in state.candles[tf]}
+                for item in rows:
+                    merged[int(item["t"])] = item
+                ordered = [merged[key] for key in sorted(merged)][-HISTORY_BARS:]
+                state.candles[tf].clear()
+                state.candles[tf].extend(ordered)
+                state.latest_analysis[tf] = state.analyse(tf)
+
+            latest = loaded["latest"]
+            state.mark_price = float(latest["c"])
+            state.index_price = state.mark_price
+            state.mark_ts = int(latest["t"]) + 60_000
+            state.exchange_prices.append((state.mark_ts, state.mark_price))
+            state.data_source = "XAUS XAU chart (Yahoo Finance proxy; reference feed)"
+            state.connection_error = None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
+            log.warning("Gold reference feed refresh failed: %s", exc)
+        await asyncio.sleep(60)
 
 async def market_stream_worker() -> None:
     streams: list[str] = ["!forceOrder@arr"]
-    for symbol in SYMBOLS.values():
+    for symbol in (states["BTC"].symbol,):
         s = symbol.lower()
         streams.extend([
             f"{s}@aggTrade",
@@ -818,7 +843,7 @@ async def market_stream_worker() -> None:
 
 
 async def depth_stream_worker() -> None:
-    streams = [f"{symbol.lower()}@depth20@100ms" for symbol in SYMBOLS.values()]
+    streams = [f"{states[\"BTC\"].symbol.lower()}@depth20@100ms"]
     url = PUBLIC_WS_BASE + "?streams=" + "/".join(streams)
     while True:
         try:
@@ -845,6 +870,8 @@ async def rest_metrics_worker() -> None:
     assert http_client is not None
     while True:
         for key, state in states.items():
+            if key != "BTC":
+                continue
             try:
                 oi = await http_client.get(f"{REST_BASE}/fapi/v1/openInterest", params={"symbol": state.symbol}, timeout=8.0)
                 oi.raise_for_status()
@@ -943,8 +970,9 @@ async def startup() -> None:
         asyncio.create_task(market_stream_worker(), name="binance-market"),
         asyncio.create_task(depth_stream_worker(), name="binance-depth"),
         asyncio.create_task(rest_metrics_worker(), name="binance-rest-metrics"),
+        asyncio.create_task(gold_market_worker(), name="gold-reference-feed"),
     ])
-    log.info("AST Liquidity Radar started for BTCUSDT and XAUUSDT")
+    log.info("AST Liquidity Radar started: BTCUSDT Binance Futures + XAUUSD reference feed")
 
 
 @app.on_event("shutdown")
@@ -971,6 +999,7 @@ async def health() -> dict[str, Any]:
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
+        "data_sources": {key: {"source": state.data_source, "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES}, "error": state.connection_error} for key, state in states.items()},
     }
 
 
