@@ -51,15 +51,15 @@ class ASTStructureStrategyTests(unittest.TestCase):
     def test_structure_break_must_match_sweep_direction_and_follow_displacement(self):
         bars = self.make_bars(30)
         sweeps = [{
-            "bar_index": 10, "time": bars[10]["t"],
+            "bar_index": 20, "time": bars[20]["t"],
             "type": "LOWER_SWEEP", "side": "BUY", "level": 99.0,
         }]
         displacement = [False] * len(bars)
-        displacement[12] = True
+        displacement[22] = True
 
         matching_event = [{
             "structure": "MINOR", "event": "BOS", "side": "BUY",
-            "level": 105.0, "time": bars[14]["t"], "bar_index": 14,
+            "level": 105.0, "time": bars[24]["t"], "bar_index": 24,
             "displacement": False,
         }]
         valid = ASTStructureStrategy._setup_for_timeframe(
@@ -78,7 +78,7 @@ class ASTStructureStrategyTests(unittest.TestCase):
         self.assertEqual(invalid["status"], "SETUP FORMING")
         self.assertFalse(invalid["checks"]["structure_break"])
 
-        early_event = [dict(matching_event[0], bar_index=11)]
+        early_event = [dict(matching_event[0], bar_index=21)]
         early = ASTStructureStrategy._setup_for_timeframe(
             "5m", bars, sweeps, displacement, early_event, [],
             "BULLISH", "BULLISH", "BUY",
@@ -101,9 +101,11 @@ class ASTStructureStrategyTests(unittest.TestCase):
         event = [{
             "timeframe": "5m", "structure": "MAJOR", "event": "BOS",
             "side": "BUY", "level": 11.0, "time": bars[12]["t"],
-            "bar_index": 12, "displacement": True,
+            "bar_index": 12, "displacement": False,
         }]
-        zones = ASTStructureStrategy._build_zones("5m", bars, event, [1.0] * len(bars))
+        displacement = [False] * len(bars)
+        displacement[11] = True
+        zones = ASTStructureStrategy._build_zones("5m", bars, event, [1.0] * len(bars), displacement)
         self.assertEqual(len(zones), 1)
         self.assertEqual(zones[0]["retests"], 2)
         self.assertEqual(zones[0]["retest_stage"], "2 RETEST")
