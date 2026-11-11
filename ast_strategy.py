@@ -10,6 +10,12 @@ class ASTStructureStrategy:
 
     TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
     SEQUENCE_BARS = 12
+    MOMENTUM_LOOKBACK = 20
+    MOMENTUM_RETEST_BARS = 12
+    MOMENTUM_ACTIVE_BARS = 24
+    MOMENTUM_ATR_MULTIPLE = 1.0
+    MOMENTUM_BODY_RATIO = 0.50
+    MOMENTUM_RETEST_ATR = 0.25
 
     def __init__(self) -> None:
         self._cache_signature: tuple[Any, ...] | None = None
@@ -379,6 +385,172 @@ class ASTStructureStrategy:
             "sweep_level": sweep["level"] if sweep else None,
             "reason": reason,
         }
+    @staticmethod
+    def _momentum_continuation_for_timeframe(
+        timeframe: str,
+        bars: list[dict[str, Any]],
+        atr: list[float],
+        major_trend: str,
+        minor_trend: str,
+    ) -> dict[str, Any]:
+        """Detect a strong 20-bar range break and a later retest rejection.
+
+        This engine is independent of liquidity sweeps. A range breakout is
+        only an alert; it becomes an entry candidate after price retests the
+        broken boundary and closes back in the breakout direction.
+        """
+        current_price = bars[-1]["c"] if bars else None
+        trend = minor_trend if minor_trend not in (None, "NEUTRAL") else major_trend
+        trend_side = "BUY" if trend == "BULLISH" else "SELL" if trend == "BEARISH" else None
+
+        empty = {
+            "engine": "MOMENTUM CONTINUATION",
+            "entry_timeframe": timeframe,
+            "status": "WAITING",
+            "side": None,
+            "candidate_side": None,
+            "direction": trend_side,
+            "score": 0,
+            "major_trend": major_trend,
+            "minor_trend": minor_trend,
+            "price": current_price,
+            "breakout_level": None,
+            "breakout_time": None,
+            "retest_zone_low": None,
+            "retest_zone_high": None,
+            "retest_age_bars": None,
+            "checks": {
+                "range_breakout": False,
+                "momentum_displacement": False,
+                "retest_touch": False,
+                "retest_rejection": False,
+            },
+            "reason": "Waiting for a strong close beyond the prior 20-candle range. A liquidity sweep is not required for this engine.",
+        }
+        lookback = ASTStructureStrategy.MOMENTUM_LOOKBACK
+        if len(bars) <= lookback or len(atr) != len(bars):
+            empty["reason"] = f"Need more than {lookback} candles to evaluate a momentum range break."
+            return empty
+
+        breakouts: list[dict[str, Any]] = []
+        first_index = max(lookback, len(bars) - ASTStructureStrategy.MOMENTUM_ACTIVE_BARS)
+        for index in range(first_index, len(bars)):
+            candle = bars[index]
+            average = atr[index]
+            candle_range = candle["h"] - candle["l"]
+            body = abs(candle["c"] - candle["o"])
+            body_ratio = body / candle_range if candle_range > 0 else 0.0
+            if average <= 0 or body < average * ASTStructureStrategy.MOMENTUM_ATR_MULTIPLE:
+                continue
+            if body_ratio < ASTStructureStrategy.MOMENTUM_BODY_RATIO:
+                continue
+
+            previous = bars[index - lookback:index]
+            range_high = max(item["h"] for item in previous)
+            range_low = min(item["l"] for item in previous)
+
+            if candle["c"] > range_high and candle["c"] > candle["o"]:
+                breakouts.append({
+                    "bar_index": index, "side": "BUY", "level": range_high,
+                    "time": candle.get("t"), "atr": average,
+                })
+            elif candle["c"] < range_low and candle["c"] < candle["o"]:
+                breakouts.append({
+                    "bar_index": index, "side": "SELL", "level": range_low,
+                    "time": candle.get("t"), "atr": average,
+                })
+
+        if not breakouts:
+            return empty
+
+        breakout = breakouts[-1]
+        breakout_index = int(breakout["bar_index"])
+        side = str(breakout["side"])
+        level = float(breakout["level"])
+        breakout_atr = max(float(breakout["atr"]), 1e-12)
+        tolerance = breakout_atr * ASTStructureStrategy.MOMENTUM_RETEST_ATR
+        age = len(bars) - 1 - breakout_index
+
+        if age > ASTStructureStrategy.MOMENTUM_RETEST_BARS:
+            result = dict(empty)
+            result["reason"] = "The latest range breakout is older than the retest window; waiting for a fresh continuation setup."
+            return result
+
+        checks = {
+            "range_breakout": True,
+            "momentum_displacement": True,
+            "retest_touch": False,
+            "retest_rejection": False,
+        }
+        invalidated = False
+
+        for index in range(breakout_index + 1, len(bars)):
+            candle = bars[index]
+            if side == "BUY":
+                if candle["c"] < level - breakout_atr * 0.50:
+                    invalidated = True
+                    break
+                touched = candle["l"] <= level + tolerance and candle["h"] >= level - tolerance
+                rejected = touched and candle["c"] >= level and candle["c"] > candle["o"]
+            else:
+                if candle["c"] > level + breakout_atr * 0.50:
+                    invalidated = True
+                    break
+                touched = candle["h"] >= level - tolerance and candle["l"] <= level + tolerance
+                rejected = touched and candle["c"] <= level and candle["c"] < candle["o"]
+
+            if touched:
+                checks["retest_touch"] = True
+                if rejected:
+                    checks["retest_rejection"] = True
+                    break
+
+        score = round(sum(checks.values()) / len(checks) * 100)
+        common = {
+            "engine": "MOMENTUM CONTINUATION",
+            "entry_timeframe": timeframe,
+            "side": side if checks["retest_rejection"] else None,
+            "candidate_side": side if not checks["retest_rejection"] and not invalidated else None,
+            "direction": side,
+            "score": score,
+            "major_trend": major_trend,
+            "minor_trend": minor_trend,
+            "price": current_price,
+            "breakout_level": level,
+            "breakout_time": breakout.get("time"),
+            "retest_zone_low": level - tolerance,
+            "retest_zone_high": level + tolerance,
+            "retest_age_bars": age,
+            "checks": checks,
+        }
+
+        if invalidated:
+            return {
+                **common,
+                "side": None,
+                "candidate_side": None,
+                "status": "INVALIDATED",
+                "reason": "Price closed decisively back through the broken range boundary; this continuation candidate is invalid.",
+            }
+        if checks["retest_rejection"]:
+            return {
+                **common,
+                "status": "ENTRY CONFIRMED",
+                "reason": "A strong 20-candle range breakout was followed by a retest of the broken boundary and a directional rejection close. No liquidity sweep was required.",
+            }
+        if checks["retest_touch"]:
+            return {
+                **common,
+                "status": "RETEST TESTING",
+                "reason": "The breakout boundary has been retested, but a directional rejection close is not confirmed yet.",
+            }
+        status = "BREAKOUT WATCH" if age == 0 else "RETEST PENDING"
+        return {
+            **common,
+            "status": status,
+            "reason": "A strong close broke the prior 20-candle range. Wait for price to retest the broken boundary; do not chase the impulse candle.",
+        }
+
     def snapshot(self, candles: dict[str, Any]) -> dict[str, Any]:
         cleaned = {tf: self._clean_bars(candles.get(tf, [])) for tf in self.TIMEFRAMES}
         signature = tuple(
@@ -402,7 +574,9 @@ class ASTStructureStrategy:
                     "message": "Need at least 30 valid closed candles",
                     "major_trend": "NEUTRAL", "minor_trend": "NEUTRAL",
                     "major_event": None, "minor_event": None,
-                    "setup": {"status": "WAITING", "side": None}, "sweeps": [],
+                    "setup": {"status": "WAITING", "side": None},
+                    "momentum_setup": {"status": "WAITING", "side": None, "candidate_side": None, "direction": None, "score": 0, "reason": "Need at least 30 valid candles."},
+                    "sweeps": [],
                 }
                 internals[tf] = None
                 continue
@@ -429,6 +603,9 @@ class ASTStructureStrategy:
                 tf, bars, sweeps, displacement, events, zones,
                 major["trend"], minor["trend"],
             )
+            momentum_setup = self._momentum_continuation_for_timeframe(
+                tf, bars, atr, major["trend"], minor["trend"],
+            )
 
             def ui_event(event):
                 if not event:
@@ -444,6 +621,13 @@ class ASTStructureStrategy:
                 "major_event": ui_event(major["latest_event"]),
                 "minor_event": ui_event(minor["latest_event"]),
                 "setup": {"status": setup["status"], "side": setup["side"] or setup["candidate_side"], "direction": setup["direction"], "score": setup["score"]},
+                "momentum_setup": {
+                    "status": momentum_setup["status"],
+                    "side": momentum_setup["side"] or momentum_setup["candidate_side"],
+                    "direction": momentum_setup["direction"],
+                    "score": momentum_setup["score"],
+                    "breakout_level": momentum_setup["breakout_level"],
+                },
                 "sweeps": [
                     {"type": item["type"], "side": item["side"], "level": item["level"], "time": item["time"]}
                     for item in sweeps[-5:]
@@ -452,23 +636,33 @@ class ASTStructureStrategy:
             internals[tf] = {
                 "bars": bars, "atr": atr, "displacement": displacement,
                 "sweeps": sweeps, "events": events, "major": major, "minor": minor,
-                "zones": zones, "setup": setup,
+                "zones": zones, "setup": setup, "momentum_setup": momentum_setup,
             }
 
         # Each timeframe keeps the setup calculated from its own candles.
         # No asset-wide direction lock or cross-timeframe voting is applied.
         setups = []
+        momentum_setups = []
         for tf in self.TIMEFRAMES:
             data = internals[tf]
             if data is None:
                 continue
             setup = data["setup"]
+            momentum_setup = data["momentum_setup"]
             setups.append(setup)
+            momentum_setups.append(momentum_setup)
             timeframe_results[tf]["setup"] = {
                 "status": setup["status"],
                 "side": setup["side"] or setup["candidate_side"],
                 "direction": setup["direction"],
                 "score": setup["score"],
+            }
+            timeframe_results[tf]["momentum_setup"] = {
+                "status": momentum_setup["status"],
+                "side": momentum_setup["side"] or momentum_setup["candidate_side"],
+                "direction": momentum_setup["direction"],
+                "score": momentum_setup["score"],
+                "breakout_level": momentum_setup["breakout_level"],
             }
         result = {
             "timeframes": timeframe_results,
@@ -476,6 +670,7 @@ class ASTStructureStrategy:
             "liquidity": all_liquidity[-80:],
             "events": sorted(all_events, key=lambda item: (item.get("time") or 0, item["timeframe"]), reverse=True)[:60],
             "setups": setups,
+            "momentum_setups": momentum_setups,
         }
         self._cache_signature = signature
         self._cache_result = copy.deepcopy(result)
