@@ -21,7 +21,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
-from abhay_patil_trap_strategy import AbhayPatilBlackBoxTrapStrategy
 from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
 from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy
 
@@ -120,7 +119,6 @@ class AssetState:
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
-    trap_engine: AbhayPatilBlackBoxTrapStrategy = field(default_factory=AbhayPatilBlackBoxTrapStrategy)
     campaign_engine: ASTInstitutionalCampaignStrategy = field(default_factory=ASTInstitutionalCampaignStrategy)
     data_source: str | None = None
     broker_candle_feed: bool = False
@@ -604,25 +602,11 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
     return unique
 
 def build_structure_snapshot(st: AssetState) -> dict[str, Any]:
-    """Keep major/minor analytics in the background and expose the uploaded trap rules."""
+    """Return the multi-timeframe structure analytics without the legacy Trap engine."""
     result = st.structure_engine.snapshot(st.candles)
-    trap_result = st.trap_engine.snapshot(st.candles)
     for setup in result.get("setups", []):
         setup["asset"] = st.key
-    for timeframe in TIMEFRAMES:
-        if timeframe in result.get("timeframes", {}):
-            result["timeframes"][timeframe]["trap_setup"] = trap_result["timeframes"][timeframe]
-    result["trap_strategy"] = {
-        "strategy_name": trap_result["strategy_name"],
-        "lookback": trap_result["lookback"],
-        "rr_ratio": trap_result["rr_ratio"],
-    }
-    result["trap_setups"] = [
-        {"asset": st.key, **trap_result["timeframes"][timeframe]}
-        for timeframe in TIMEFRAMES
-    ]
     return result
-
 
 def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
     """Backward-compatible route name; now returns all timeframe strategy setups."""
@@ -1227,67 +1211,6 @@ async def vantage_mt5_candles(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid MT5 candle payload") from exc
 
 
-_trap_scanner_cache: dict[str, Any] | None = None
-_trap_scanner_cache_at = 0.0
-_trap_scanner_cache_lock: asyncio.Lock | None = None
-
-
-@app.get("/api/scanner")
-async def scanner() -> dict[str, Any]:
-    """Return only the uploaded Black Box trap strategy; cache briefly to avoid repeat replays."""
-    global _trap_scanner_cache, _trap_scanner_cache_at, _trap_scanner_cache_lock
-    loop = asyncio.get_running_loop()
-    if _trap_scanner_cache is not None and loop.time() - _trap_scanner_cache_at < 4.0:
-        return _trap_scanner_cache
-
-    if _trap_scanner_cache_lock is None:
-        _trap_scanner_cache_lock = asyncio.Lock()
-
-    async with _trap_scanner_cache_lock:
-        loop = asyncio.get_running_loop()
-        if _trap_scanner_cache is not None and loop.time() - _trap_scanner_cache_at < 4.0:
-            return _trap_scanner_cache
-
-        asset_data: list[dict[str, Any]] = []
-        trap_setups: list[dict[str, Any]] = []
-        for state in states.values():
-            trap_result = await asyncio.to_thread(
-                state.trap_engine.snapshot,
-                state.candles,
-            )
-            timeframes = {
-                timeframe: {
-                    "ready": setup.get("status") != "WARMING UP",
-                    "bars": int(setup.get("bars_scanned", 0) or 0),
-                    "message": setup.get("reason"),
-                    "trap_setup": setup,
-                }
-                for timeframe, setup in trap_result.get("timeframes", {}).items()
-            }
-            asset_data.append({
-                "asset": state.key,
-                "timeframes": timeframes,
-                "trap_setups": [
-                    {"asset": state.key, **setup}
-                    for setup in trap_result.get("timeframes", {}).values()
-                ],
-                "trap_strategy": {
-                    "strategy_name": trap_result.get("strategy_name"),
-                    "lookback": trap_result.get("lookback", 20),
-                    "rr_ratio": trap_result.get("rr_ratio", 2.0),
-                },
-            })
-            trap_setups.extend(asset_data[-1]["trap_setups"])
-
-        _trap_scanner_cache = {
-            "time": now_ms(),
-            "assets": list(states.keys()),
-            "asset_data": asset_data,
-            "trap_setups": trap_setups,
-        }
-        _trap_scanner_cache_at = loop.time()
-        return _trap_scanner_cache
-
 _campaign_scanner_cache: dict[str, Any] | None = None
 _campaign_scanner_cache_at = 0.0
 _campaign_scanner_cache_lock: asyncio.Lock | None = None
@@ -1324,7 +1247,7 @@ async def campaign_scanner() -> dict[str, Any]:
 
         _campaign_scanner_cache = {
             "time": now_ms(),
-            "strategy_name": "AST Multi-Timeframe Institutional Trap & Continuous Pyramiding",
+            "strategy_name": "AST Multi-Timeframe Pyramiding Campaign",
             "assets": assets,
         }
         _campaign_scanner_cache_at = loop.time()
@@ -1353,7 +1276,6 @@ async def config() -> dict[str, Any]:
         "notes": [
             "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
             "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
-            "Trap replay scans up to 25000 closed candles per timeframe (bounded by MT5/provider history and terminal Max bars in chart); this is not unlimited history.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
             "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
