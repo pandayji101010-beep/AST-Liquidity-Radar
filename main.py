@@ -1268,7 +1268,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST Multi-Timeframe Institutional Trap & Continuous Pyramiding: Monthly/weekly/daily/4h/1h/30m/15m/5m context, confirmed 1m sweep/rejection + MSS/BOS + displacement + FVG/OB retest, main and add-on campaign entries, risk controls and point-in-time replay.",
+        "strategy": "AST Multi-Timeframe Pyramiding Campaign: Monthly/weekly/daily/4h/1h/30m/15m/5m context, confirmed 1m sweep/rejection + MSS/BOS + displacement + FVG/OB retest, main and add-on campaign entries, risk controls and point-in-time replay.",
         "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
         "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
