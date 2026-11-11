@@ -17,7 +17,7 @@
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="brand"><div class="mark">AST</div><div><h1>INSTITUTIONAL LIQUIDITY RADAR</h1><div class="sub">BTC Binance Futures + GOLD COMEX reference · Vantage price mapping</div></div></div>
+    <div class="brand"><div class="mark">AST</div><div><h1>INSTITUTIONAL LIQUIDITY RADAR</h1><div class="sub" id="sourceSubtitle">BTC Binance Futures + GOLD COMEX reference · Vantage price mapping</div></div></div>
     <div class="controls"><label class="small" for="tf">Analysis TF</label><select id="tf"><option>1m</option><option selected>5m</option><option>15m</option><option>30m</option><option>1h</option><option>4h</option><option>1d</option></select><div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting data streams…</span></div></div>
   </div>
   <div class="grid">
@@ -51,8 +51,9 @@ function biasKind(s){return s==='BULLISH'?'good':s==='BEARISH'?'bad':'neutral'}
 function renderAsset(id,a){
   const el=$(id); const an=a.analysis||{}; const sc=a.scores||{}; const bull=sc.bull_pressure; const bear=sc.bear_pressure;
   const price=a.exchange_price? n(a.exchange_price,a.asset==='BTC'?1:3):'—';
-  const mappedFresh=a.vantage_feed_fresh && a.basis_samples>=3 && a.exchange_feed_fresh && a.basis_updated_ts && (Date.now()-a.basis_updated_ts)<=180000;
-  const mappedPrice=mappedFresh? n(a.vantage_price,a.asset==='BTC'?1:3):'Waiting for bridge';
+  const directGold=a.asset==='GOLD' && a.broker_candle_feed && a.vantage_feed_fresh && a.exchange_feed_fresh;
+  const mappedFresh=directGold || (a.vantage_feed_fresh && a.basis_samples>=3 && a.exchange_feed_fresh && a.basis_updated_ts && (Date.now()-a.basis_updated_ts)<=180000);
+  const mappedPrice=directGold? n(a.exchange_price,3):(mappedFresh? n(a.vantage_price,a.asset==='BTC'?1:3):'Waiting for bridge');
   const session=an.commodity_session?.status;
   const pressure = sc.label||'WARMING UP';
   const pressureKind=pressure.includes('BEARISH')?'bad':pressure.includes('BULLISH')?'good':'warn';
@@ -67,9 +68,9 @@ function renderAsset(id,a){
   const bullNum=bull===null||bull===undefined?'—':n(bull,0);
   const bearNum=bear===null||bear===undefined?'—':n(bear,0);
   el.innerHTML=`
-    <div class="head"><div><div class="asset">${a.asset==='BTC'?'BITCOIN':'GOLD'}</div><div class="symbol">${a.exchange_symbol} · ${a.asset==='BTC'?'Binance USDⓈ-M Futures':'COMEX gold futures reference'}</div></div>${tag(pressure,pressureKind)}</div>
-    <div class="price">${price}</div><div class="small">${a.asset==='BTC'?'Binance Futures mark price':'Gold futures reference price'} · Vantage live quote: <b>${mappedPrice}</b></div><div class="tiny">${a.historical_source||'Historical source unavailable'}</div>
-    <div class="small" style="margin-top:4px">${mappedFresh?`Basis ratio ${Number(a.basis_ratio).toFixed(6)} · ${a.vantage_ticker||'Vantage feed'} · ${a.vantage_timeframe||'TF'}`:'Vantage MT5 bridge not calibrated / stale'} ${a.asset==='GOLD'&&a.commodity_session?.status?` · Commodity session: ${a.commodity_session.status}`:''}</div>
+    <div class="head"><div><div class="asset">${a.asset==='BTC'?'BITCOIN':'GOLD'}</div><div class="symbol">${a.exchange_symbol} · ${a.asset==='BTC'?'Binance USDⓈ-M Futures':(directGold?'Vantage MT5 broker feed':'COMEX gold futures reference')}</div></div>${tag(pressure,pressureKind)}</div>
+    <div class="price">${price}</div><div class="small">${a.asset==='BTC'?'Binance Futures mark price':(directGold?'Vantage MT5 broker price':'Gold futures reference price')} · Vantage live quote: <b>${mappedPrice}</b></div><div class="tiny">${a.historical_source||'Historical source unavailable'}</div>
+    <div class="small" style="margin-top:4px">${directGold?`Direct Vantage MT5 OHLC · ${a.vantage_ticker||'XAUUSD'} · ${a.broker_candle_age_seconds??'—'}s candle sync`:(mappedFresh?`Basis ratio ${Number(a.basis_ratio).toFixed(6)} · ${a.vantage_ticker||'Vantage feed'} · ${a.vantage_timeframe||'TF'}`:'Vantage MT5 bridge not calibrated / stale')} ${a.asset==='GOLD'&&a.commodity_session?.status?` · Commodity session: ${a.commodity_session.status}`:''}</div>
     <div class="scoregrid">
       <div class="score"><div class="small">BULLISH PRESSURE INDEX</div><div class="num" style="color:var(--green)">${bullNum}<span class="small"> / 100</span></div><div class="bar"><div class="fill green" style="width:${bull||0}%"></div></div></div>
       <div class="score"><div class="small">BEARISH PRESSURE INDEX</div><div class="num" style="color:var(--red)">${bearNum}<span class="small"> / 100</span></div><div class="bar"><div class="fill red" style="width:${bear||0}%"></div></div></div>
@@ -154,6 +155,7 @@ async function refresh(){
     const tf=$('tf').value;
     const [snap,health,scanner]=await Promise.all([fetch(`/api/snapshot?timeframe=${tf}`).then(r=>r.json()),fetch('/api/health').then(r=>r.json()),fetch('/api/scanner').then(r=>r.json())]);
     renderAsset('btc',snap.assets.BTC); renderAsset('gold',snap.assets.GOLD); renderScanner(scanner.setups); renderStructure(scanner.asset_data);
+    $('sourceSubtitle').textContent=snap.assets.GOLD.broker_candle_feed?'BTC Binance Futures + GOLD Vantage MT5 broker candles':'BTC Binance Futures + GOLD COMEX reference · Vantage price mapping';
     const live=health.market_stream_connected;
     $('connDot').className='dot '+(live?'on':'off');
     $('connText').textContent=live?'Binance feed connected':'Waiting for Binance feed';
