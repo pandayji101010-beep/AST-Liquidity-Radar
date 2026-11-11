@@ -32,6 +32,26 @@ GOLD_SYMBOL = os.getenv("MT5_GOLD_SYMBOL", "XAUUSD").strip()
 PRICE_SIDE = os.getenv("MT5_PRICE_SIDE", "bid").strip().lower()
 POLL_SECONDS = max(0.25, float(os.getenv("MT5_POLL_SECONDS", "0.5")))
 
+GOLD_CANDLE_SYNC_SECONDS = max(2.0, float(os.getenv("MT5_GOLD_CANDLE_SYNC_SECONDS", "5")))
+GOLD_HISTORY_BARS = {
+    "1m": 3000,
+    "5m": 2500,
+    "15m": 2000,
+    "30m": 1500,
+    "1h": 1000,
+    "4h": 750,
+    "1d": 500,
+}
+MT5_TIMEFRAMES = {
+    "1m": mt5.TIMEFRAME_M1,
+    "5m": mt5.TIMEFRAME_M5,
+    "15m": mt5.TIMEFRAME_M15,
+    "30m": mt5.TIMEFRAME_M30,
+    "1h": mt5.TIMEFRAME_H1,
+    "4h": mt5.TIMEFRAME_H4,
+    "1d": mt5.TIMEFRAME_D1,
+}
+
 
 def initialise_mt5() -> None:
     if MT5_PATH:
@@ -104,6 +124,60 @@ def tick_payload(asset: str, symbol: str, tick: Any) -> dict[str, Any] | None:
     }
 
 
+
+def sync_gold_candles(
+    session: requests.Session,
+    headers: dict[str, str],
+    symbol: str,
+    bootstrap: bool,
+) -> dict[str, int]:
+    """Send Vantage broker-native GOLD OHLC history and recent candle updates."""
+    payload: dict[str, Any] = {
+        "asset": "GOLD",
+        "symbol": symbol,
+        "replace": bootstrap,
+        "timeframes": {},
+    }
+    for timeframe, mt5_timeframe in MT5_TIMEFRAMES.items():
+        count = GOLD_HISTORY_BARS[timeframe] if bootstrap else 2
+        rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
+        if rates is None or len(rates) == 0:
+            log.warning("No MT5 %s candles for %s: %s", timeframe, symbol, mt5.last_error())
+            continue
+
+        rows: list[dict[str, float | int]] = []
+        for rate in rates:
+            rows.append({
+                "t": int(rate["time"]) * 1000,
+                "o": float(rate["open"]),
+                "h": float(rate["high"]),
+                "l": float(rate["low"]),
+                "c": float(rate["close"]),
+                "v": float(rate["tick_volume"]),
+            })
+        payload["timeframes"][timeframe] = rows
+
+    if not payload["timeframes"]:
+        raise RuntimeError(f"MT5 returned no OHLC candles for {symbol}")
+
+    response = session.post(
+        f"{BACKEND_URL}/api/vantage/mt5/candles",
+        headers=headers,
+        json=payload,
+        timeout=15 if bootstrap else 6,
+    )
+    response.raise_for_status()
+    result = response.json()
+    counts = result.get("bars", {})
+    log.info(
+        "GOLD %s | Vantage broker candles synced | mode=%s | bars=%s",
+        symbol,
+        "history" if bootstrap else "recent",
+        counts,
+    )
+    return {str(key): int(value) for key, value in counts.items()}
+
+
 def main() -> int:
     if not BRIDGE_SECRET or BRIDGE_SECRET == "replace-this-secret":
         log.error("Set VANTAGE_BRIDGE_SECRET in .env to the same value as the backend.")
@@ -137,6 +211,8 @@ def main() -> int:
     symbols = ([("BTC", btc_symbol)] if btc_symbol else []) + [("GOLD", gold_symbol)]
     last_sent: dict[str, int] = {}
     last_health_check = 0.0
+    last_candle_sync = 0.0
+    candles_bootstrapped = False
 
     try:
         while True:
@@ -148,6 +224,14 @@ def main() -> int:
                 except requests.RequestException as exc:
                     log.warning("Backend is not reachable yet: %s", exc)
                 last_health_check = now
+
+            if now - last_candle_sync >= GOLD_CANDLE_SYNC_SECONDS:
+                try:
+                    sync_gold_candles(session, headers, gold_symbol, bootstrap=not candles_bootstrapped)
+                    candles_bootstrapped = True
+                except Exception as exc:
+                    log.warning("Could not sync Vantage GOLD candles: %s", exc)
+                last_candle_sync = now
 
             for asset, symbol in symbols:
                 tick = mt5.symbol_info_tick(symbol)
@@ -167,7 +251,14 @@ def main() -> int:
                     response.raise_for_status()
                     result = response.json()
                     last_sent[asset] = stamp
-                    if result.get("matched"):
+                    if result.get("direct_feed"):
+                        log.info(
+                            "%s %s | Vantage broker price %.5f | direct OHLC feed active",
+                            asset,
+                            symbol,
+                            payload["price"],
+                        )
+                    elif result.get("matched"):
                         log.info(
                             "%s %s | Vantage %.5f | Binance %.5f | ratio %s | samples %s",
                             asset,
