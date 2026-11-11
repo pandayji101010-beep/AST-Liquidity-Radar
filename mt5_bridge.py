@@ -126,7 +126,7 @@ def main() -> int:
 
     session = requests.Session()
     url = f"{BACKEND_URL}/api/vantage/mt5"
-    params = {"secret": BRIDGE_SECRET}
+    headers = {"X-AST-Bridge-Secret": BRIDGE_SECRET}
     symbols = ([("BTC", btc_symbol)] if btc_symbol else []) + [("GOLD", gold_symbol)]
     last_sent: dict[str, int] = {}
     last_health_check = 0.0
@@ -154,7 +154,7 @@ def main() -> int:
                 if last_sent.get(asset) == stamp:
                     continue
                 try:
-                    response = session.post(url, params=params, json=payload, timeout=3)
+                    response = session.post(url, headers=headers, json=payload, timeout=3)
                     response.raise_for_status()
                     result = response.json()
                     last_sent[asset] = stamp

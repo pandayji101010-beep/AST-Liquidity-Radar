@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -1006,10 +1007,11 @@ async def snapshot(timeframe: str = Query("5m", pattern="^(1m|5m|15m|30m|1h|4h|1
 
 
 @app.post("/api/vantage/mt5")
-async def vantage_mt5_bridge(request: Request, secret: str | None = Query(default=None)) -> JSONResponse:
+async def vantage_mt5_bridge(request: Request) -> JSONResponse:
     if not BRIDGE_SECRET or BRIDGE_SECRET == "replace-this-secret":
         raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET in the server .env first")
-    if secret != BRIDGE_SECRET:
+    supplied_secret = request.headers.get("X-AST-Bridge-Secret", "")
+    if not hmac.compare_digest(supplied_secret, BRIDGE_SECRET):
         raise HTTPException(status_code=401, detail="Invalid bridge secret")
     try:
         payload = await request.json()
