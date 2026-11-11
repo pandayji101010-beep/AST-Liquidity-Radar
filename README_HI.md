@@ -13,6 +13,24 @@ Yeh first runnable release hai. Binance USDⓈ-M public market data se BTCUSDT a
 - Local Vantage MT5 tick bridge + rolling median price ratio calibration.
 - Web dashboard aur optional Telegram alerts.
 
+## Uploaded Abhay Patil Black Box Trap Strategy
+
+Dashboard ka trap scanner uploaded Pine v5 file ke rules ko har available timeframe (1m, 5m, 15m, 30m, 1h, 4h, 1d) par historical closed candles ke oldest-to-newest replay se evaluate karta hai. Yeh generic wick-sweep + BOS strategy nahi hai.
+
+- Swing High / Low Lookback: 20 left bars + 20 right bars; pivot tabhi active hota hai jab right-side ke 20 candles close ho chuke hon.
+- Bear Trap / BUY: candle ka close active support ke neeche cross kare, phir later green candle support ke upar close kare. Us reclaim candle ka high BUY STOP entry aur low SL hota hai.
+- Bull Trap / SELL: candle ka close active resistance ke upar cross kare, phir later red candle resistance ke neeche close kare. Us reclaim candle ka low SELL STOP entry aur high SL hota hai.
+- Source strategy mein pending stop order ka expiry nahi hai; woh trigger hone ya newer setup se replace hone tak pending rehta hai.
+- Exit: reclaim candle ke range ke basis par ek hi TP, default 1:2 risk/reward. Uploaded source mein alag TP1/TP2 nahi hain.
+- Historical statistics sirf available OHLC history par bar-based simulation hain. Agar SL aur TP ek hi candle mein touch hon, scanner conservative result ke liye SL pehle count karta hai. Actual spread, slippage aur TradingView broker-emulator fills alag ho sakte hain.
+
+### Historical data depth
+
+- Backend maximum 25,000 closed candles per timeframe retain/replay karta hai. Actual count Vantage history availability, Binance archive availability aur MT5 terminal setting par depend karta hai.
+- Vantage MT5 mein Tools → Options → Charts → Max bars in chart ko kam-se-kam 25,000 set karein.
+- Latest mt5_bridge.py download karke bridge restart karein, taaki 25,000-bar history bootstrap ho. Dashboard par har card mein scanned candles aur first/last data time dikhte hain.
+- BTC 1m history Binance USD-M archive se aati hai; GOLD XAUUSD history directly Vantage MT5 se aati hai. Dono sources ko ek doosre ke prices ke saath mix nahi kiya jata.
+
 ## Data source aur limitations
 
 - BTC: Binance USDⓈ-M BTCUSDT perpetual.
