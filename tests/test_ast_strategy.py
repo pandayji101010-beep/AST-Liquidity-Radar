@@ -69,6 +69,10 @@ class ASTStructureStrategyTests(unittest.TestCase):
         self.assertEqual(valid["status"], "ENTRY CONFIRMED")
         self.assertTrue(valid["checks"]["structure_break"])
         self.assertEqual(valid["score"], 75)
+        self.assertIsNotNone(valid["trade_plan"])
+        self.assertEqual(valid["trade_plan"]["side"], "BUY")
+        self.assertGreater(valid["trade_plan"]["take_profit_1"], valid["trade_plan"]["entry_price"])
+        self.assertGreater(valid["trade_plan"]["take_profit_2"], valid["trade_plan"]["take_profit_1"])
 
         opposite_event = [dict(matching_event[0], side="SELL")]
         invalid = ASTStructureStrategy._setup_for_timeframe(

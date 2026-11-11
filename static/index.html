@@ -12,6 +12,79 @@
 
 .structure-layout{display:grid;gap:13px;margin-top:13px}.structure-asset{border:1px solid #26384b;background:#0a131e;border-radius:12px;padding:13px;min-width:0}.structure-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}.structure-tfs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.structure-tf{border:1px solid #24364a;background:#0b1724;border-radius:9px;padding:9px;min-width:0}.structure-tf b{font-size:12px}.structure-tf .tiny{display:block;margin-top:5px;line-height:1.5}.structure-bottom{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.structure-list{display:grid;gap:6px}.structure-row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:7px 9px;border:1px solid #203247;border-radius:8px;font-size:11px;background:#0c1825}.structure-row span:first-child{color:#bdccda}.structure-row b{font-variant-numeric:tabular-nums}.zone-buy{color:var(--green)}.zone-sell{color:var(--red)}.tiny-muted{font-size:10px;color:var(--muted);line-height:1.5}.scanner-item .tiny{line-height:1.6}.check{white-space:nowrap}@media(max-width:900px){.structure-tfs{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.structure-tfs{grid-template-columns:repeat(2,minmax(0,1fr))}.structure-bottom{grid-template-columns:1fr}.structure-asset{padding:10px}}
 
+
+/* Mobile-first app shell shared by the browser and Android WebView. */
+.mobile-nav{display:none}
+.trade-board-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+.trade-tf-card{background:#0a131e;border:1px solid #26384b;border-radius:12px;padding:12px;min-width:0}
+.trade-tf-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:9px}
+.trade-engine{border-top:1px solid #203247;padding-top:9px;margin-top:9px}
+.trade-engine:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.trade-engine-title{font-size:11px;font-weight:800;display:flex;justify-content:space-between;gap:7px;align-items:center}
+.trade-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px}
+.trade-level{background:#101b2a;border:1px solid #26384b;border-radius:8px;padding:8px;min-width:0}
+.trade-level .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.trade-level .v{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;margin-top:3px}
+.trade-level.entry .v{color:var(--cyan)}
+.trade-level.stop .v{color:var(--red)}
+.trade-level.target .v{color:var(--green)}
+.trade-note{font-size:10px;color:var(--muted);line-height:1.5;margin-top:8px}
+.trade-wait{font-size:11px;color:var(--muted);line-height:1.55;margin-top:7px}
+.mobile-nav a{color:#c9d8e7;text-decoration:none;font-size:11px;font-weight:750;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:#0c1724;white-space:nowrap}
+@media(max-width:700px){
+  html{scroll-behavior:smooth;scroll-padding-top:112px}
+  body{font-size:13px;background:#080d16}
+  .wrap{padding:8px 9px 28px}
+  .top{position:sticky;top:0;z-index:50;margin:-8px -9px 8px;padding:9px 10px;background:rgba(8,13,22,.96);border-bottom:1px solid #223349;backdrop-filter:blur(14px);gap:7px}
+  .brand{gap:9px;min-width:0}
+  .mark{width:35px;height:35px;border-radius:11px;font-size:15px;flex:0 0 auto}
+  .brand h1{font-size:13px;letter-spacing:.025em;line-height:1.2}
+  .sub{font-size:10px;line-height:1.3}
+  .controls{gap:6px;margin-left:auto}
+  .controls label{display:none}
+  select{padding:7px 8px;font-size:11px;border-radius:8px}
+  .status{font-size:9px;max-width:108px}
+  .mobile-nav{display:flex;position:sticky;top:58px;z-index:45;gap:6px;overflow-x:auto;padding:7px 0 9px;margin:0 0 7px;background:rgba(8,13,22,.96);scrollbar-width:none}
+  .mobile-nav::-webkit-scrollbar{display:none}
+  .mobile-nav a{padding:7px 10px;font-size:10px}
+  .grid{grid-template-columns:1fr;gap:9px}
+  .card{padding:12px;border-radius:13px}
+  .asset{font-size:14px}
+  .price{font-size:25px;margin:5px 0 1px}
+  .scoregrid{gap:7px;margin:10px 0}
+  .score{padding:9px}
+  .score .num{font-size:21px}
+  .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .metric{padding:8px}
+  .metric .k{font-size:9px}
+  .metric .v{font-size:12px}
+  .section{font-size:11px;margin:13px 0 7px}
+  .full{margin-top:9px}
+  .scanner-grid{grid-template-columns:1fr;gap:8px;margin-top:9px}
+  .scanner-item{padding:10px}
+  .scanner-score{font-size:19px}
+  .tag{font-size:9px;padding:4px 7px}
+  .trade-board-grid{grid-template-columns:1fr;gap:8px;margin-top:9px}
+  .trade-tf-card{padding:10px}
+  .trade-grid{gap:6px}
+  .trade-level{padding:7px}
+  .trade-level .v{font-size:12px}
+  .structure-tfs{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .structure-tf{padding:7px}
+  .structure-bottom{grid-template-columns:1fr;gap:8px}
+  .structure-asset{padding:9px}
+  .reaction-row{grid-template-columns:1fr auto}
+  .reaction-rule{grid-column:1/-1;grid-row:2}
+  .event{gap:7px;padding:8px 0}
+  .event .etype{min-width:105px;font-size:10px}
+  .event .desc{font-size:11px}
+  .footer{font-size:10px}
+}
+@media(min-width:701px) and (max-width:900px){
+  .wrap{padding:13px}
+  .grid{grid-template-columns:1fr}
+  .trade-board-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 </style>
 </head>
 <body>
@@ -20,19 +93,31 @@
     <div class="brand"><div class="mark">AST</div><div><h1>INSTITUTIONAL LIQUIDITY RADAR</h1><div class="sub" id="sourceSubtitle">BTC Binance Futures + GOLD COMEX reference · Vantage price mapping</div></div></div>
     <div class="controls"><label class="small" for="tf">Analysis TF</label><select id="tf"><option>1m</option><option selected>5m</option><option>15m</option><option>30m</option><option>1h</option><option>4h</option><option>1d</option></select><div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting data streams…</span></div></div>
   </div>
+
+  <nav class="mobile-nav" aria-label="Quick navigation">
+    <a href="#tradeBoard">Trade levels</a>
+    <a href="#reversalSection">Reversal</a>
+    <a href="#momentumSection">Momentum</a>
+    <a href="#structureSection">Structure</a>
+  </nav>
   <div class="grid">
     <section class="card" id="btc"></section>
     <section class="card" id="gold"></section>
   </div>
-  <section class="card full">
+
+  <section class="card full" id="tradeBoard">
+    <div class="head"><div><div class="asset">TRADE LEVEL BOARD · 1m TO 1D</div><div class="sub">Entry zone · Stop loss · TP1 1.5R · TP2 2R · only confirmed plans are actionable</div></div><div class="tag neutral">BTC + GOLD</div></div>
+    <div id="tradeLevels" class="trade-board-grid"><div class="empty">Calculating timeframe trade levels…</div></div>
+  </section>
+  <section class="card full" id="reversalSection">
     <div class="head"><div><div class="asset">AST MULTI-TIMEFRAME CHOCH / BOS SETUP SCANNER</div><div class="sub">Independent setup detection on every timeframe · BTC/GOLD locks stay separate</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="scanner" class="scanner-grid"><div class="empty">Scanner warming up…</div></div>
   </section>
-  <section class="card full">
+  <section class="card full" id="momentumSection">
     <div class="head"><div><div class="asset">AST MOMENTUM CONTINUATION SCANNER</div><div class="sub">Range breakout without a required liquidity sweep · displacement · retest · rejection · independently evaluated per timeframe</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="momentumScanner" class="scanner-grid"><div class="empty">Momentum engine warming up…</div></div>
   </section>
-  <section class="card full">
+  <section class="card full" id="structureSection">
     <div class="head"><div><div class="asset">MAJOR + MINOR STRUCTURE / LIQUIDITY MAP</div><div class="sub">15m+ major structure direction lock · 1m–1D setup scan · BOS / CHOCH · BSL / SSL · origin-zone retest tracking</div></div><div class="tag neutral">1D → 1m</div></div>
     <div id="structure" class="structure-layout"><div class="empty">Collecting confirmed pivots and structure events…</div></div>
   </section>
@@ -40,7 +125,7 @@
     <div class="head"><div><div class="asset">LIVE EVENT TAPE</div><div class="sub">Confirmed range sweeps, displacement breaks and liquidation prints</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="events" class="events"><div class="empty">Waiting for first market event…</div></div>
   </section>
-  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use Yahoo Finance COMEX GC=F reference data and may differ from a Vantage XAUUSD CFD quote. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. The separate momentum continuation engine flags strong 20-candle range breaks and waits for a retest/rejection; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. Vantage prices are mapped using a rolling median ratio from your logged-in Vantage MT5 terminal tick bridge. Never use a stale or uncalibrated mapping for execution.</div>
+  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. The separate momentum continuation engine flags strong 20-candle range breaks and waits for a retest/rejection; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trade plans use a retest entry zone, a structural stop, and fixed 1.5R / 2R planning targets. They are educational levels, not guaranteed fills or price destinations; account for spread, slippage and risk.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -125,6 +210,55 @@ function renderScanner(setups){
   }).join('');
 }
 
+function renderTradeLevels(assetData){
+  if(!assetData || !assetData.length){
+    $('tradeLevels').innerHTML='<div class="empty">Waiting for multi-timeframe candle data…</div>';
+    return;
+  }
+  const order=['1m','5m','15m','30m','1h','4h','1d'];
+  const cards=[];
+  for(const asset of assetData){
+    const tfs=asset.timeframes||{};
+    for(const tf of order){
+      const state=tfs[tf]||{};
+      const plans=[
+        {label:'LIQUIDITY REVERSAL',setup:state.setup||{},plan:state.setup?.trade_plan||null},
+        {label:'MOMENTUM CONTINUATION',setup:state.momentum_setup||{},plan:state.momentum_setup?.trade_plan||null}
+      ];
+      const content=plans.map(item=>{
+        const setup=item.setup;
+        const plan=item.plan;
+        const side=plan?.side||setup.side||((setup.status && setup.status!=='WAITING' && setup.status!=='WARMING UP')?setup.direction:null)||'—';
+        const sideColor=side==='BUY'?'var(--green)':side==='SELL'?'var(--red)':'var(--muted)';
+        if(!plan){
+          let watch='No confirmed trade plan';
+          if(setup.status && setup.status!=='WAITING' && setup.status!=='WARMING UP'){
+            watch=setup.status+' · '+(side!=='—'?side+' candidate':'');
+          }
+          const breakout=setup.breakout_level!==undefined&&setup.breakout_level!==null
+            ? '<div class="trade-wait">Breakout boundary: <b>'+n(setup.breakout_level,asset.asset==='BTC'?1:3)+'</b></div>' : '';
+          return '<div class="trade-engine"><div class="trade-engine-title"><span>'+item.label+'</span>'+tag(setup.status||'WAITING','neutral')+'</div><div class="trade-wait">'+watch+'. Waiting for confirmation; SL/TP are not issued yet.</div>'+breakout+'</div>';
+        }
+        const digits=asset.asset==='BTC'?1:3;
+        const stateKind=plan.entry_state==='PRICE INSIDE ENTRY ZONE'?'good':plan.entry_state==='PRICE THROUGH ZONE — RECHECK SETUP'?'bad':'warn';
+        return '<div class="trade-engine">'
+          + '<div class="trade-engine-title"><span>'+item.label+'</span>'+tag(plan.side+' · '+setup.status,'good')+'</div>'
+          + '<div class="trade-wait">'+tag(plan.entry_state,stateKind)+'</div>'
+          + '<div class="trade-grid">'
+          + '<div class="trade-level entry"><div class="k">'+plan.side+' entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
+          + '<div class="trade-level stop"><div class="k">Stop loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
+          + '<div class="trade-level target"><div class="k">TP1 · 1.5R</div><div class="v">'+n(plan.take_profit_1,digits)+'</div></div>'
+          + '<div class="trade-level target"><div class="k">TP2 · 2R</div><div class="v">'+n(plan.take_profit_2,digits)+'</div></div>'
+          + '</div>'
+          + '<div class="trade-note">Entry reference '+n(plan.entry_price,digits)+' · risk '+n(plan.risk_percent,2)+'% of entry · '+plan.instruction+'</div>'
+          + '</div>';
+      }).join('');
+      cards.push('<article class="trade-tf-card"><div class="trade-tf-head"><b>'+asset.asset+' · '+tf.toUpperCase()+'</b>'+tag(state.ready?'LIVE DATA':'WARMING UP',state.ready?'good':'neutral')+'</div>'+content+'</article>');
+    }
+  }
+  $('tradeLevels').innerHTML=cards.join('');
+}
+
 function renderMomentumScanner(setups){
   if(!setups || !setups.length){
     $('momentumScanner').innerHTML='<div class="empty">Momentum engine is waiting for a strong close beyond the prior 20-candle range. It does not require a liquidity sweep.</div>';
@@ -191,7 +325,7 @@ async function refresh(){
   try{
     const tf=$('tf').value;
     const [snap,health,scanner]=await Promise.all([fetch(`/api/snapshot?timeframe=${tf}`).then(r=>r.json()),fetch('/api/health').then(r=>r.json()),fetch('/api/scanner').then(r=>r.json())]);
-    renderAsset('btc',snap.assets.BTC); renderAsset('gold',snap.assets.GOLD); renderScanner(scanner.setups); renderMomentumScanner(scanner.momentum_setups); renderStructure(scanner.asset_data);
+    renderAsset('btc',snap.assets.BTC); renderAsset('gold',snap.assets.GOLD); renderScanner(scanner.setups); renderMomentumScanner(scanner.momentum_setups); renderTradeLevels(scanner.asset_data); renderStructure(scanner.asset_data);
     $('sourceSubtitle').textContent=snap.assets.GOLD.broker_candle_feed?'BTC Binance Futures + GOLD Vantage MT5 broker candles':'BTC Binance Futures + GOLD COMEX reference · Vantage price mapping';
     const live=health.market_stream_connected;
     $('connDot').className='dot '+(live?'on':'off');
