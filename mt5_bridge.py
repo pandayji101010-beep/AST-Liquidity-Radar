@@ -85,10 +85,17 @@ def tick_payload(asset: str, symbol: str, tick: Any) -> dict[str, Any] | None:
     if tick_time <= 0:
         tick_time = int(getattr(tick, "time", time.time()) * 1000)
 
+    # MT5 trade-server tick timestamps can differ from UTC exchange-stream
+    # timestamps by a broker-server offset. Keep the broker timestamp for
+    # deduplication/diagnostics, but use this PC's UTC epoch receipt time when
+    # matching the just-received quote to the live exchange stream.
+    received_time_msc = int(time.time() * 1000)
+
     return {
         "asset": asset,
         "symbol": symbol,
-        "time_msc": tick_time,
+        "time_msc": received_time_msc,
+        "source_time_msc": tick_time,
         "bid": bid or None,
         "ask": ask or None,
         "last": last or None,
@@ -150,7 +157,9 @@ def main() -> int:
                 payload = tick_payload(asset, symbol, tick)
                 if payload is None:
                     continue
-                stamp = int(payload["time_msc"])
+                # Deduplicate on MT5's original tick time; time_msc is
+                # intentionally the UTC receipt time used for exchange matching.
+                stamp = int(payload.get("source_time_msc") or payload["time_msc"])
                 if last_sent.get(asset) == stamp:
                     continue
                 try:
