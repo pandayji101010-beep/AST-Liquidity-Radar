@@ -133,7 +133,7 @@ def sync_gold_candles(
     symbol: str,
     bootstrap: bool,
 ) -> dict[str, Any]:
-    """Send Vantage broker-native GOLD OHLC history and recent candle updates."""
+    """Send only completed Vantage broker-native GOLD OHLC candles (never the forming bar)."""
     payload: dict[str, Any] = {
         "asset": "GOLD",
         "symbol": symbol,
@@ -142,7 +142,7 @@ def sync_gold_candles(
     }
     for timeframe, mt5_timeframe in MT5_TIMEFRAMES.items():
         count = GOLD_HISTORY_BARS[timeframe] if bootstrap else 2
-        rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
+        rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 1, count)
         if rates is None or len(rates) == 0:
             log.warning("No MT5 %s candles for %s: %s", timeframe, symbol, mt5.last_error())
             continue
