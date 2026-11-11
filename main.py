@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
+from abhay_patil_trap_strategy import AbhayPatilBlackBoxTrapStrategy
 from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,7 +38,7 @@ MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
 SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSD"}
 TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
-HISTORY_BARS = int(os.getenv("AST_HISTORY_BARS", "10000"))
+HISTORY_BARS = max(25_000, int(os.getenv("AST_HISTORY_BARS", "25_000")))
 BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -118,6 +119,7 @@ class AssetState:
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
+    trap_engine: AbhayPatilBlackBoxTrapStrategy = field(default_factory=AbhayPatilBlackBoxTrapStrategy)
     data_source: str | None = None
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
@@ -600,10 +602,23 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
     return unique
 
 def build_structure_snapshot(st: AssetState) -> dict[str, Any]:
-    """Run the cached, closed-candle major/minor structure strategy for one asset."""
+    """Keep major/minor analytics in the background and expose the uploaded trap rules."""
     result = st.structure_engine.snapshot(st.candles)
+    trap_result = st.trap_engine.snapshot(st.candles)
     for setup in result.get("setups", []):
         setup["asset"] = st.key
+    for timeframe in TIMEFRAMES:
+        if timeframe in result.get("timeframes", {}):
+            result["timeframes"][timeframe]["trap_setup"] = trap_result["timeframes"][timeframe]
+    result["trap_strategy"] = {
+        "strategy_name": trap_result["strategy_name"],
+        "lookback": trap_result["lookback"],
+        "rr_ratio": trap_result["rr_ratio"],
+    }
+    result["trap_setups"] = [
+        {"asset": st.key, **trap_result["timeframes"][timeframe]}
+        for timeframe in TIMEFRAMES
+    ]
     return result
 
 
@@ -1208,6 +1223,8 @@ async def scanner() -> dict[str, Any]:
             "liquidity": strategy.get("liquidity", []),
             "events": strategy.get("events", []),
             "momentum_setups": strategy.get("momentum_setups", []),
+            "trap_setups": strategy.get("trap_setups", []),
+            "trap_strategy": strategy.get("trap_strategy", {}),
         })
     return {
         "time": now_ms(),
@@ -1215,6 +1232,7 @@ async def scanner() -> dict[str, Any]:
         "setups": setups,
         "momentum_setups": momentum_setups,
         "asset_data": asset_data,
+        "trap_setups": [setup for asset in asset_data for setup in asset.get("trap_setups", [])],
     }
 
 
@@ -1232,7 +1250,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST Major/Minor CHOCH + BOS + Liquidity Sweep + Displacement + Origin-Zone Retests",
+        "strategy": "Uploaded Abhay Patil Black Box: 20/20 pivots, close fake-break, reclaim candle, stop-entry, wick stop and one 1:2 TP; major/minor analytics remain in the background.",
         "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
         "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
@@ -1240,7 +1258,7 @@ async def config() -> dict[str, Any]:
         "notes": [
             "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
             "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
-            "Historical depth is controlled by AST_HISTORY_BARS (default 10000 per timeframe); this is bounded history, not unlimited history.",
+            "Trap replay scans up to 25000 closed candles per timeframe (bounded by MT5/provider history and terminal Max bars in chart); this is not unlimited history.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
             "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",

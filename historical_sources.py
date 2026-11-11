@@ -142,7 +142,7 @@ async def _load_interval_archive(
 async def load_btc_um_history(
     client: httpx.AsyncClient,
     symbol: str = "BTCUSDT",
-    limit: int = 10_000,
+    limit: int = 25_000,
 ) -> dict[str, Any]:
     """Load two completed months plus current-month daily USD-M Futures 1m archives."""
     now = datetime.now(timezone.utc)

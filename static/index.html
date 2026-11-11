@@ -35,6 +35,17 @@
 .trap-check{font-size:9px;border:1px solid #74552d;color:var(--amber);border-radius:999px;padding:4px 7px}
 .trap-check.pass{border-color:#24674f;color:var(--green)}
 .trap-type{font-size:11px;font-weight:850;letter-spacing:.06em;color:var(--muted);margin:6px 0}
+
+.trap-history{margin-top:12px;padding-top:10px;border-top:1px solid #26384b}
+.trap-history-head{font-size:10px;font-weight:850;letter-spacing:.07em;color:#c4d5e5;margin-bottom:8px}
+.trap-history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.trap-history-grid span{display:flex;justify-content:space-between;gap:6px;padding:7px 8px;background:#0c1825;border:1px solid #203247;border-radius:7px;font-size:10px;color:var(--muted)}
+.trap-history-grid b{color:#edf4fa;font-variant-numeric:tabular-nums}
+.trap-history-grid .good-text{color:var(--green)}
+.trap-history-grid .bad-text{color:var(--red)}
+.trap-recent{margin-top:10px}
+.trap-recent>b{font-size:10px;color:#c4d5e5}
+@media(max-width:700px){.trap-history-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.pa-asset-grid{grid-template-columns:1fr;gap:8px}.pa-asset-heading{margin:2px 0 7px}.pa-card{padding:11px}}
 .pa-card{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
 .pa-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
@@ -154,14 +165,14 @@
     <div id="tradeLevels" class="price-action-grid"><div class="empty">Scanning price-action setups across all timeframes…</div></div>
   </section>
   <section class="card full" id="trapSection">
-    <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">Bull trap / Bear trap · BSL / SSL sweep · reclaim · displacement · BOS / CHOCH · BTC + GOLD · 1m to 1D</div></div><div class="tag neutral">ALL 14 TIMEFRAMES</div></div>
+    <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">Abhay Patil Black Box Pine v5 · 20/20 pivot S/R · close fake-break · reclaim candle · stop-entry · wick SL · one TP at 1:2 · full available history</div></div><div class="tag neutral">ALL 14 TIMEFRAMES</div></div>
     <div id="trapSignals" class="price-action-grid"><div class="empty">Scanning liquidity trap setups across all timeframes…</div></div>
   </section>
   <section class="card full">
     <div class="head"><div><div class="asset">LIVE EVENT TAPE</div><div class="sub">Confirmed range sweeps, displacement breaks and liquidation prints</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="events" class="events"><div class="empty">Waiting for first market event…</div></div>
   </section>
-  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. Momentum continuation plans remain available in the Trade Level Board after confirmation; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Price-action trade cards combine confirmed liquidity-reversal and momentum-continuation setups across all existing timeframes, with retest entry zones, structural stops, and fixed 1.5R / 2R planning targets. They are educational levels, not guaranteed fills or price destinations; account for spread, slippage and risk.</div>
+  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. Momentum continuation plans remain available in the Trade Level Board after confirmation; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trap cards replay the supplied Abhay Patil Black Box rules on all loaded closed candles: 20-left/20-right pivots, close-based fake break, reclaim candle, stop-entry at reclaim high/low, stop at opposite wick and one 2R target. If stop and target both touch in one OHLC bar, the replay assumes SL first. They are educational levels, not guaranteed fills or price destinations; account for spread, slippage and risk.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -352,7 +363,7 @@ function renderPriceActionSignals(assetData){
 
 function renderTrapSignals(assetData){
   if(!assetData || !assetData.length){
-    $('trapSignals').innerHTML='<div class="empty">Waiting for BTC and GOLD trap-analysis candles…</div>';
+    $('trapSignals').innerHTML='<div class="empty">Waiting for BTC and GOLD trap-history candles…</div>';
     return;
   }
   const order=['1m','5m','15m','30m','1h','4h','1d'];
@@ -365,57 +376,95 @@ function renderTrapSignals(assetData){
     const cards=[];
     for(const tf of order){
       const state=tfs[tf]||{};
-      const trap=state.trap_setup||{};
       const ready=Boolean(state.ready);
-      const confirmed=trap.status==='TRAP CONFIRMED' && trap.trade_plan;
-      const pending=['SWEEP DETECTED','TRAP FORMING','RISK PLAN UNAVAILABLE'].includes(trap.status);
-      const kind=confirmed?'good':pending?'warn':'neutral';
-      const side=confirmed?trap.trade_plan.side:(trap.candidate_side||trap.side||null);
+      const trap=state.trap_setup||{};
+      const stats=trap.history||{};
+      const signal=trap.current_signal||null;
+      const plan=signal?.trade_plan||null;
+      const active=signal?.status==='TRADE ACTIVE';
+      const pending=signal?.status==='ENTRY PENDING';
+      const status=!ready?'WARMING UP':(trap.status||'WAITING');
+      const kind=active?'good':pending?'warn':
+        status==='FAKE BREAK ALERT'?'warn':'neutral';
+      const side=signal?.side||trap.last_trade?.side||trap.last_trap?.side||null;
       const color=side==='BUY'?'var(--green)':side==='SELL'?'var(--red)':'var(--muted)';
-      const title=confirmed
-        ? (trap.trap_type+' · '+side)
-        : pending && trap.trap_type
-          ? (trap.trap_type+' · '+(side||'WAIT'))
+      const title=active||pending
+        ? ((signal.trap_type||'TRAP')+' · '+side)
+        : trap.last_trade
+          ? ((trap.last_trade.trap_type||'TRAP')+' · '+(trap.last_trade.outcome||'CLOSED'))
+          : trap.bear_trap_alert?'BEAR TRAP ALERT'
+          : trap.bull_trap_alert?'BULL TRAP ALERT'
           : 'NO ACTIVE TRAP';
-      let status=!ready?'WARMING UP':(trap.status||'WAITING');
+
       let body='';
       if(!ready){
-        body='<div class="pa-empty">Data warming up · '+(state.bars||0)+' / 30 candles</div>';
-      }else if(confirmed){
-        const plan=trap.trade_plan;
-        const entryKind=plan.entry_state==='PRICE INSIDE ENTRY ZONE'?'good':plan.entry_state==='PRICE THROUGH ZONE — RECHECK SETUP'?'bad':'warn';
-        body='<div class="pa-state '+entryKind+'">'+plan.entry_state+'</div>'
+        body='<div class="pa-empty">'+(state.message||'History warming up')+' · '+(state.bars||0)+' bars</div>';
+      }else if(plan&&(active||pending)){
+        body='<div class="pa-state '+(active?'good':'warn')+'">'+(active?'STOP ORDER FILLED · TRADE ACTIVE':plan.entry_state)+'</div>'
           +'<div class="pa-levels">'
-          +'<div class="pa-level entry"><div class="k">'+side+' entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
+          +'<div class="pa-level entry"><div class="k">'+(plan.order_type||side+' STOP')+' entry</div><div class="v">'+n(plan.entry_price,digits)+'</div></div>'
           +'<div class="pa-level stop"><div class="k">Stop loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
-          +'<div class="pa-level target"><div class="k">TP1 · 1.5R</div><div class="v">'+n(plan.take_profit_1,digits)+'</div></div>'
-          +'<div class="pa-level target"><div class="k">TP2 · 2R</div><div class="v">'+n(plan.take_profit_2,digits)+'</div></div>'
+          +'<div class="pa-level target"><div class="k">Take profit · 1:2</div><div class="v">'+n(plan.take_profit,digits)+'</div></div>'
+          +'<div class="pa-level"><div class="k">Reclaim level</div><div class="v">'+n(signal.reclaim_level,digits)+'</div></div>'
           +'</div>'
-          +'<div class="pa-foot">Entry reference '+n(plan.entry_price,digits)+' · '+plan.instruction+' Target levels are planning references, not guaranteed prices.</div>';
-      }else if(pending){
-        const checks=trap.checks||{};
+          +'<div class="pa-foot">Fake-break level '+n(signal.break_level,digits)
+          +' · reclaim H '+n(signal.reclaim_high,digits)+' / L '+n(signal.reclaim_low,digits)
+          +(active?' · actual fill '+n(signal.fill_price,digits):' · stop-entry waits for a later candle')
+          +'. The uploaded strategy has one target at 2R.</div>';
+      }else if(trap.last_trade){
+        const last=trap.last_trade;
+        body='<div class="pa-empty">Last historical trade: <b>'+last.outcome+'</b>'
+          +' · Entry '+n(last.fill_price,digits)
+          +' · Exit '+n(last.exit_price,digits)
+          +' · Result '+n(last.result_r,2)+'R'
+          +(last.ambiguous_exit_bar?' · same-bar SL/TP counted as SL':'')
+          +'. No live order now.</div>';
+      }else if(trap.bear_trap_alert||trap.bull_trap_alert){
         body='<div class="trap-checks">'
-          +'<span class="trap-check '+(checks.liquidity_sweep?'pass':'')+'">'+(checks.liquidity_sweep?'✓':'○')+' Liquidity sweep</span>'
-          +'<span class="trap-check '+(checks.directional_displacement?'pass':'')+'">'+(checks.directional_displacement?'✓':'○')+' Displacement</span>'
-          +'<span class="trap-check '+(checks.structure_confirmation?'pass':'')+'">'+(checks.structure_confirmation?'✓':'○')+' BOS / CHOCH</span>'
+          +'<span class="trap-check pass">✓ Close broke '+(trap.bear_trap_alert?'support':'resistance')+'</span>'
+          +'<span class="trap-check">○ Reclaim candle pending</span>'
           +'</div>'
-          +'<div class="pa-empty">'+(trap.reason||'Waiting for trap confirmation.')+'</div>'
-          +(trap.sweep_level!==null&&trap.sweep_level!==undefined?'<div class="pa-foot">Swept level: <b>'+n(trap.sweep_level,digits)+'</b> · '+(trap.sweep_type||'')+'</div>':'');
+          +'<div class="pa-empty">Fake-break alert armed. Wait for a candle to close back through the active level in the opposite direction.</div>';
       }else{
-        body='<div class="pa-empty">'+(trap.reason||'No confirmed liquidity trap on this timeframe. Waiting for a sweep and reclaim.')+'</div>';
+        body='<div class="pa-empty">No current stop-entry or open trade. All available closed candles have been scanned on this timeframe.</div>';
       }
-      const trend=ready
-        ? '<div class="pa-trend">Major '+(state.major_trend||'NEUTRAL')+' · Minor '+(state.minor_trend||'NEUTRAL')+' · '+(state.bars||0)+' closed candles</div>'
-        : '<div class="pa-trend">'+(state.message||'Waiting for candle history')+'</div>';
+
+      const historical='<div class="trap-history">'
+        +'<div class="trap-history-head">HISTORICAL REPLAY · '+(stats.bars_scanned??state.bars??0).toLocaleString()+' candles</div>'
+        +'<div class="trap-history-grid">'
+        +'<span>Traps <b>'+(stats.traps_detected??0)+'</b></span>'
+        +'<span>Orders filled <b>'+(stats.orders_filled??0)+'</b></span>'
+        +'<span>TP hits <b class="good-text">'+(stats.wins??0)+'</b></span>'
+        +'<span>SL hits <b class="bad-text">'+(stats.losses??0)+'</b></span>'
+        +'<span>Win rate <b>'+(stats.win_rate_pct===null||stats.win_rate_pct===undefined?'—':n(stats.win_rate_pct,2)+'%')+'</b></span>'
+        +'<span>Net result <b>'+n(stats.net_r??0,2)+'R</b></span>'
+        +'</div>'
+        +'<div class="pa-foot">Fake breaks '+(stats.fake_breaks_detected??0)
+        +' · pending '+(stats.pending_orders??0)
+        +' · active '+(stats.active_trades??0)
+        +' · data '+(trap.first_bar_time?time(trap.first_bar_time):'—')
+        +' → '+(trap.last_bar_time?time(trap.last_bar_time):'—')+'</div>'
+        +'</div>';
+
+      const recent=(trap.recent_traps||[]).slice(-3).reverse();
+      const recentHtml=recent.length
+        ? '<div class="trap-recent"><b>Recent historical traps</b>'+recent.map(row=>
+          '<div class="pa-watch-row"><span>'+row.trap_type+' · '+row.side+' · '+time(row.signal_time)
+          +' · Entry '+n(row.entry_trigger,digits)+'</span>'+tag(row.outcome||row.status,'neutral')+'</div>'
+        ).join('')+'</div>'
+        : '';
+
       cards.push('<article class="pa-card">'
         +'<div class="pa-top"><span class="pa-time">'+assetName+' · '+tf.toUpperCase()+'</span>'+tag(status,kind)+'</div>'
         +'<div class="pa-signal" style="color:'+color+'">'+title+'</div>'
-        +'<div class="trap-type">'+(trap.sweep_type|| (trap.trap_type ? trap.trap_type : 'LIQUIDITY TRAP SCAN'))+'</div>'
-        +trend+body+'</article>');
+        +'<div class="trap-type">'+(signal?.sweep_side||trap.last_trap?.sweep_side||'PIVOT S/R · LOOKBACK '+(trap.lookback||20))+'</div>'
+        +'<div class="pa-trend">Major '+(state.major_trend||'NEUTRAL')+' · Minor '+(state.minor_trend||'NEUTRAL')+' · Pine lookback '+(trap.lookback||20)+' · TP 1:'+(trap.rr_ratio||2)+'</div>'
+        +body+historical+recentHtml
+        +'</article>');
     }
-    groups.push('<section class="pa-asset-group"><div class="pa-asset-heading"><b>'+assetName+'</b><span>TRAP SETUPS · 1M TO 1D</span></div><div class="pa-asset-grid">'+cards.join('')+'</div></section>');
+    groups.push('<section class="pa-asset-group"><div class="pa-asset-heading"><b>'+assetName+'</b><span>BLACK BOX TRAP REPLAY · 1M TO 1D</span></div><div class="pa-asset-grid">'+cards.join('')+'</div></section>');
   }
-  $('trapSignals').innerHTML=groups.length?groups.join(''):'<div class="empty">Trap analysis data is not available yet.</div>';
+  $('trapSignals').innerHTML=groups.length?groups.join(''):'<div class="empty">Trap history data is not available yet.</div>';
 }
 
 function renderEvents(events){
