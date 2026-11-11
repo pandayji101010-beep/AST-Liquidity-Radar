@@ -104,6 +104,10 @@ class AssetState:
     basis_ratios: deque[float] = field(default_factory=lambda: deque(maxlen=60))
     basis_ratio: float | None = None
     basis_offset: float | None = None
+    vantage_match_delta_ms: int | None = None
+    vantage_match_candidate_price: float | None = None
+    vantage_match_ratio: float | None = None
+    vantage_match_reason: str = "Waiting for matched exchange tick"
     basis_updated_ts: int | None = None
     latest_analysis: dict[str, Any] = field(default_factory=dict)
     recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=100))
@@ -649,6 +653,10 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "vantage_feed_fresh": vantage_fresh,
         "basis_ratio": st.basis_ratio,
         "basis_offset": st.basis_offset,
+        "vantage_match_delta_ms": st.vantage_match_delta_ms,
+        "vantage_match_candidate_price": st.vantage_match_candidate_price,
+        "vantage_match_ratio": st.vantage_match_ratio,
+        "vantage_match_reason": st.vantage_match_reason,
         "basis_updated_ts": st.basis_updated_ts,
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
@@ -938,14 +946,27 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
     state.vantage_tf = "MT5 TICK"
 
     closest = min(state.exchange_prices, key=lambda x: abs(x[0] - tick_time), default=None)
-    matched = bool(closest and abs(closest[0] - tick_time) <= 15_000)
-    if matched and closest[1] > 0:
-        ratio = price / closest[1]
-        if 0.90 <= ratio <= 1.10:
-            state.basis_ratios.append(ratio)
-            state.basis_ratio = median_or_none(state.basis_ratios)
-            state.basis_offset = price - closest[1]
-            state.basis_updated_ts = now_ms()
+    match_delta_ms = abs(closest[0] - tick_time) if closest else None
+    matched = bool(closest and match_delta_ms is not None and match_delta_ms <= 15_000)
+    ratio = (price / closest[1]) if closest and closest[1] > 0 else None
+
+    state.vantage_match_delta_ms = match_delta_ms
+    state.vantage_match_candidate_price = closest[1] if closest else None
+    state.vantage_match_ratio = ratio
+    if closest is None:
+        state.vantage_match_reason = "No exchange tick available"
+    elif not matched:
+        state.vantage_match_reason = "Timestamp gap exceeds 15 seconds"
+    elif ratio is None or not (0.90 <= ratio <= 1.10):
+        state.vantage_match_reason = "Price ratio outside 0.90-1.10 range"
+    else:
+        state.vantage_match_reason = "Matched"
+
+    if matched and ratio is not None and 0.90 <= ratio <= 1.10:
+        state.basis_ratios.append(ratio)
+        state.basis_ratio = median_or_none(state.basis_ratios)
+        state.basis_offset = price - closest[1]
+        state.basis_updated_ts = now_ms()
 
     return {
         "asset": key,
@@ -955,6 +976,8 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
         "matched_exchange_price": closest[1] if closest else None,
         "basis_ratio": state.basis_ratio,
         "basis_samples": len(state.basis_ratios),
+        "match_delta_ms": match_delta_ms,
+        "match_reason": state.vantage_match_reason,
         "matched": matched,
     }
 
