@@ -31,6 +31,10 @@ class MomentumContinuationTests(unittest.TestCase):
         self.assertTrue(setup["checks"]["momentum_displacement"])
         self.assertTrue(setup["checks"]["retest_touch"])
         self.assertTrue(setup["checks"]["retest_rejection"])
+        self.assertIsNotNone(setup["trade_plan"])
+        self.assertEqual(setup["trade_plan"]["side"], "SELL")
+        self.assertIsNotNone(setup["trade_plan"])
+        self.assertEqual(setup["trade_plan"]["side"], "BUY")
 
     def test_bearish_range_break_and_retest_confirms_without_sweep(self):
         bars = base_candles()
