@@ -320,17 +320,31 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 http_client: httpx.AsyncClient | None = None
 background_tasks: list[asyncio.Task] = []
 last_alert_sent: dict[str, float] = defaultdict(float)
+CAMPAIGN_ALERT_POLL_SECONDS = 2.0
+CAMPAIGN_ALERTS_ENABLED = ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+campaign_alert_seen: dict[str, set[str]] = defaultdict(set)
 
 
-async def send_telegram(message: str) -> None:
+async def send_telegram(message: str) -> bool:
     if not ENABLE_TELEGRAM or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return False
+    if http_client is None:
+        return False
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        assert http_client is not None
-        await http_client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "disable_web_page_preview": True}, timeout=8.0)
+        response = await http_client.post(
+            url,
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "disable_web_page_preview": True},
+            timeout=8.0,
+        )
+        payload = response.json()
+        if response.status_code >= 400 or not payload.get("ok"):
+            log.warning("Telegram send rejected: HTTP %s | %s", response.status_code, response.text[:180])
+            return False
+        return True
     except Exception as exc:
         log.warning("Telegram send failed: %s", exc)
+        return False
 
 
 def build_event_trade_plan(st: AssetState, event_type: str, timeframe: str, event_price: float | None) -> dict[str, Any]:
@@ -1138,6 +1152,12 @@ async def startup() -> None:
         name="historical-bootstrap",
     )
     background_tasks.append(bootstrap_task)
+    if CAMPAIGN_ALERTS_ENABLED:
+        alert_task = asyncio.create_task(campaign_alert_worker(), name="campaign-telegram-alerts")
+        background_tasks.append(alert_task)
+        log.info("Campaign Telegram alerts enabled; monitoring every %.1f seconds", CAMPAIGN_ALERT_POLL_SECONDS)
+    else:
+        log.info("Campaign Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
     log.info("AST Liquidity Radar API ready; historical bootstrap running in background")
 
 
@@ -1164,6 +1184,8 @@ async def health() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
+        "campaign_alerts_enabled": CAMPAIGN_ALERTS_ENABLED,
+        "campaign_alert_poll_seconds": CAMPAIGN_ALERT_POLL_SECONDS if CAMPAIGN_ALERTS_ENABLED else None,
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
         "data_sources": {key: {"source": state.data_source, "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES}, "error": state.connection_error} for key, state in states.items()},
     }
@@ -1221,7 +1243,7 @@ async def campaign_scanner() -> dict[str, Any]:
     """Return point-in-time multi-timeframe analysis and simulated 1m campaigns."""
     global _campaign_scanner_cache, _campaign_scanner_cache_at, _campaign_scanner_cache_lock
     loop = asyncio.get_running_loop()
-    if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 5.0:
+    if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 2.0:
         return _campaign_scanner_cache
 
     if _campaign_scanner_cache_lock is None:
@@ -1229,7 +1251,7 @@ async def campaign_scanner() -> dict[str, Any]:
 
     async with _campaign_scanner_cache_lock:
         loop = asyncio.get_running_loop()
-        if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 5.0:
+        if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 2.0:
             return _campaign_scanner_cache
 
         assets: list[dict[str, Any]] = []
@@ -1252,6 +1274,140 @@ async def campaign_scanner() -> dict[str, Any]:
         }
         _campaign_scanner_cache_at = loop.time()
         return _campaign_scanner_cache
+
+
+
+
+def _campaign_alert_price(asset: str, value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        digits = 1 if asset == "BTC" else 3
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _campaign_alert_quantity(value: Any) -> str:
+    if value is None:
+        return "NOT CONFIGURED"
+    try:
+        return f"{float(value):,.5f}"
+    except (TypeError, ValueError):
+        return "NOT CONFIGURED"
+
+
+def _campaign_setup_alert_id(asset: str, execution: dict[str, Any]) -> str:
+    signal_time = execution.get("signal_time") or execution.get("signal_close") or execution.get("entry_price")
+    return f"setup:{signal_time}:{execution.get('kind')}:{execution.get('side')}"
+
+
+def _seed_campaign_alert_state(asset: str, result: dict[str, Any]) -> None:
+    """Avoid sending stale alerts for positions already present when the worker starts."""
+    seen = campaign_alert_seen[asset]
+    execution = result.get("execution_1m") or {}
+    if execution.get("status") == "ENTRY READY · NEXT 1M OPEN":
+        seen.add(_campaign_setup_alert_id(asset, execution))
+    campaign = result.get("campaign") or {}
+    for position in campaign.get("positions", []):
+        position_id = str(position.get("id") or "")
+        if position_id:
+            seen.add(f"fill:{position_id}")
+            if position.get("partial_taken"):
+                seen.add(f"partial:{position_id}")
+    for position in result.get("recent_closed", []):
+        position_id = str(position.get("id") or "")
+        if position_id:
+            seen.add(f"closed:{position_id}")
+
+
+async def campaign_alert_worker() -> None:
+    """Monitor strategy state on the server and send Telegram alerts independent of the dashboard tab."""
+    bootstrapped_assets: set[str] = set()
+    while True:
+        try:
+            payload = await campaign_scanner()
+            for result in payload.get("assets", []):
+                asset = str(result.get("asset") or "MARKET").upper()
+                replay = result.get("replay") or {}
+                if asset not in bootstrapped_assets:
+                    if int(replay.get("bars_available") or 0) > 0:
+                        _seed_campaign_alert_state(asset, result)
+                        bootstrapped_assets.add(asset)
+                    continue
+
+                seen = campaign_alert_seen[asset]
+                execution = result.get("execution_1m") or {}
+                if execution.get("status") == "ENTRY READY · NEXT 1M OPEN":
+                    alert_id = _campaign_setup_alert_id(asset, execution)
+                    if alert_id not in seen:
+                        side = execution.get("side") or "TRADE"
+                        message = (
+                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\\n"
+                            f"{side} {execution.get('kind') or 'ENTRY'} SETUP CONFIRMED · 1M\\n"
+                            f"Planned Entry: {_campaign_alert_price(asset, execution.get('entry_price'))}\\n"
+                            f"Stop Loss: {_campaign_alert_price(asset, execution.get('stop_loss'))}\\n"
+                            f"Partial TP (1R): {_campaign_alert_price(asset, execution.get('partial_take_profit'))}\\n"
+                            f"Final TP: {_campaign_alert_price(asset, execution.get('take_profit'))}\\n"
+                            f"Score: {execution.get('score', '—')} | Target: {execution.get('target_r', '—')}R\\n"
+                            "Status: Waiting for next 1m open validation.\\n"
+                            "SIMULATED PLAN ONLY — no broker order is placed."
+                        )
+                        if await send_telegram(message):
+                            seen.add(alert_id)
+
+                campaign = result.get("campaign") or {}
+                for position in campaign.get("positions", []):
+                    position_id = str(position.get("id") or "")
+                    if not position_id:
+                        continue
+                    fill_id = f"fill:{position_id}"
+                    if fill_id not in seen:
+                        message = (
+                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\\n"
+                            f"{position.get('side', 'TRADE')} {position.get('kind', 'ENTRY')} · SIMULATED FILL CONFIRMED\\n"
+                            f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\\n"
+                            f"SL: {_campaign_alert_price(asset, position.get('stop_loss'))}\\n"
+                            f"Partial TP: {_campaign_alert_price(asset, position.get('partial_take_profit'))}\\n"
+                            f"Final TP: {_campaign_alert_price(asset, position.get('take_profit'))}\\n"
+                            f"Quantity: {_campaign_alert_quantity(position.get('quantity'))}\\n"
+                            "SIMULATED FILL ONLY — this dashboard does not place a broker order."
+                        )
+                        if await send_telegram(message):
+                            seen.add(fill_id)
+
+                    partial_id = f"partial:{position_id}"
+                    if position.get("partial_taken") and partial_id not in seen:
+                        message = (
+                            f"AST CAMPAIGN UPDATE | {asset}\\n"
+                            f"{position.get('side', 'TRADE')} PARTIAL TARGET HIT\\n"
+                            "50% partial booking simulated at 1R; remaining stop moved to breakeven."
+                        )
+                        if await send_telegram(message):
+                            seen.add(partial_id)
+
+                for position in result.get("recent_closed", []):
+                    position_id = str(position.get("id") or "")
+                    close_id = f"closed:{position_id}"
+                    if not position_id or close_id in seen:
+                        continue
+                    message = (
+                        f"AST CAMPAIGN EXIT | {asset}\\n"
+                        f"{position.get('side', 'TRADE')} · {position.get('status', 'CLOSED')}\\n"
+                        f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\\n"
+                        f"Exit: {_campaign_alert_price(asset, position.get('exit_price'))}\\n"
+                        f"Result: {position.get('result_r', '—')}R\\n"
+                        "This is a simulated strategy result, not a broker execution."
+                    )
+                    if await send_telegram(message):
+                        seen.add(close_id)
+
+            await asyncio.sleep(CAMPAIGN_ALERT_POLL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Campaign Telegram alert worker failed")
+            await asyncio.sleep(max(5.0, CAMPAIGN_ALERT_POLL_SECONDS))
 
 
 @app.get("/api/events")

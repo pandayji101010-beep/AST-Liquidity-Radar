@@ -488,13 +488,30 @@ body{
  .campaign-status-line{font-size:11px}
 }
 
+.auto-refresh-label{font-size:10px;font-weight:800;letter-spacing:.06em;color:var(--muted)}
+.auto-refresh-toggle{background:#162536;border:1px solid #38506a;color:#e8f0f7;border-radius:9px;padding:8px 11px;font-size:11px;font-weight:750;cursor:pointer}
+.auto-refresh-toggle:hover{border-color:#70c9e3}
+#notificationStatus{white-space:nowrap}
+@media(max-width:700px){
+  .auto-refresh-label{display:none}
+  .auto-refresh-toggle{padding:7px 9px;font-size:10px}
+  #notificationStatus{flex-basis:100%;justify-content:flex-end;font-size:10px}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
     <div class="brand"><div class="mark">AST</div><div><h1>AST FOUR-ENGINE CAMPAIGN</h1><div class="sub" id="sourceSubtitle">MBIE → Multi-Timeframe → Entry → Campaign · BTC + GOLD</div></div></div>
-    <div class="controls"><div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting campaign engine…</span></div></div>
+    <div class="controls">
+      <div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting campaign engine…</span></div>
+      <label for="refreshInterval" class="auto-refresh-label">AUTO</label>
+      <select id="refreshInterval" aria-label="Auto refresh interval">
+        <option value="2000" selected>2 sec</option><option value="5000">5 sec</option><option value="10000">10 sec</option>
+      </select>
+      <button type="button" id="refreshToggle" class="auto-refresh-toggle" aria-pressed="false">Pause</button>
+      <span id="notificationStatus" class="status" title="Telegram campaign notifications status">Telegram alerts: checking…</span>
+    </div>
   </div>
 
   <section class="card full" id="campaignSection">
@@ -743,6 +760,12 @@ async function refresh(){
       fetchJson('/api/campaign')
     ]);
     renderCampaigns(campaign);
+    const alertsOn=Boolean(health.campaign_alerts_enabled);
+    $('notificationStatus').textContent=alertsOn?'Telegram alerts: ON':'Telegram alerts: OFF · setup required';
+    $('notificationStatus').style.color=alertsOn?'var(--green)':'var(--amber)';
+    $('notificationStatus').title=alertsOn
+      ? 'Server-side campaign alerts are monitoring independently of this dashboard tab.'
+      : 'Set ENABLE_TELEGRAM=true, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render Environment.';
     $('connDot').className='dot '+(health.market_stream_connected?'on':'off');
     $('connText').textContent=health.market_stream_connected
       ? 'API connected · market feed live'
@@ -755,6 +778,22 @@ async function refresh(){
     refreshInFlight=false;
   }
 }
-refresh();setInterval(refresh,5000);
+let refreshTimer=null;
+let refreshPaused=false;
+function configureAutoRefresh(){
+  if(refreshTimer!==null){clearInterval(refreshTimer);refreshTimer=null;}
+  const interval=Number($('refreshInterval').value)||2000;
+  $('refreshToggle').textContent=refreshPaused?'Resume':'Pause';
+  $('refreshToggle').setAttribute('aria-pressed',String(refreshPaused));
+  if(!refreshPaused) refreshTimer=setInterval(refresh,interval);
+}
+$('refreshInterval').addEventListener('change',configureAutoRefresh);
+$('refreshToggle').addEventListener('click',()=>{
+  refreshPaused=!refreshPaused;
+  configureAutoRefresh();
+  if(!refreshPaused) refresh();
+});
+refresh();
+configureAutoRefresh();
 </script>
 </body></html>

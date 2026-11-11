@@ -99,3 +99,18 @@ The strategy extension is implemented as four separate runtime engines with one-
 
 
 The full strategy document is maintained in `AST_PYRAMID_STRATEGY_COMPLETE.md`: original Sections 1–14, MBIE Section 15, and the explicit four-engine responsibility architecture in Section 16.
+
+
+## Auto-refresh and campaign Telegram notifications
+
+- The dashboard refreshes automatically every 2 seconds by default. The header control can change this to 5 or 10 seconds or pause/resume browser refresh. The campaign API cache is also set to 2 seconds.
+- Campaign notifications are checked by a server-side worker every 2 seconds while the Render service is running. It can alert for a confirmed 1m BUY/SELL setup awaiting next-open validation, a simulated position fill, a 50% partial target, and a simulated close (stop, final target or invalidation).
+- Alerts use Telegram Bot API. Create a bot with Telegram's BotFather, open the bot chat and send `/start`, then set these environment variables in Render (Environment):
+  - `ENABLE_TELEGRAM=true`
+  - `TELEGRAM_BOT_TOKEN=<your bot token>`
+  - `TELEGRAM_CHAT_ID=<your private chat id>`
+- Save the environment changes and allow the service to redeploy. The dashboard header shows whether campaign Telegram alerts are configured; `/api/health` reports `campaign_alerts_enabled`.
+- Keep the bot token private. Never add it to GitHub, frontend code or screenshots.
+- Alerts explicitly describe analytical/simulated plans and fills. This application does not submit broker orders.
+- Render Free web services can spin down after 15 minutes without inbound HTTP requests or messages on an existing inbound WebSocket connection. When the service is asleep, its background alert worker cannot monitor the market or send Telegram notifications. Reliable unattended alerts while the dashboard is closed require an always-on service plan. See Render's free-instance limitations.
+
