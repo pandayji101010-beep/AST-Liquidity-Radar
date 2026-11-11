@@ -422,6 +422,20 @@ body{
   .pa-active-card{padding:12px;border-radius:12px}
 }
 
+
+/* Engine rules panel — visually matched to the timeframe sequence. */
+.engine-rule-list{display:flex;flex-direction:column;gap:8px;margin-top:13px}
+.engine-rule{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 15px;background:#0c1825;border:1px solid #26384b;border-radius:12px;min-width:0}
+.engine-rule-main{display:flex;flex-direction:column;gap:5px;min-width:0}
+.engine-rule-title{font-size:13px;font-weight:850;letter-spacing:.035em;color:#e9f0f8}
+.engine-rule-desc{font-size:12px;line-height:1.55;color:#a9bbcd;max-width:980px}
+.engine-rule-note{font-size:10px;color:var(--muted);line-height:1.55;margin-top:10px}
+@media(max-width:700px){
+  .engine-rule{align-items:flex-start;flex-direction:column;gap:8px;padding:12px}
+  .engine-rule-title{font-size:12px}
+  .engine-rule-desc{font-size:11px}
+}
+
 </style>
 </head>
 <body>
@@ -434,6 +448,39 @@ body{
   <section class="card full" id="trapSection">
     <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">Uploaded PDF strategy only · BTC + GOLD · 1m to 1D · 20/20 pivot support/resistance · close break + reclaim · stop-entry · wick SL · one TP at 1:2</div></div><div class="tag neutral">14 TIMEFRAME CARDS</div></div>
     <div id="trapSignals" class="price-action-grid"><div class="empty">Connecting to Trap scanner and loading candle history…</div></div>
+  </section>
+  <section class="card full" id="engineRules">
+    <div class="head">
+      <div>
+        <div class="asset">CORE SYSTEM ENGINES</div>
+        <div class="sub">Multi-timeframe confirmation · Campaign-level risk · Point-in-time historical replay</div>
+      </div>
+      <div class="tag neutral">ENGINE RULES</div>
+    </div>
+    <div class="engine-rule-list">
+      <article class="engine-rule">
+        <div class="engine-rule-main">
+          <div class="engine-rule-title">01 · NON-REPAINTING ENGINE</div>
+          <div class="engine-rule-desc">Higher Timeframe ki confirmation candle tabhi valid hogi jab woh completely close ho. Running / incomplete candle par final confirmation nahi milegi.</div>
+        </div>
+        <span class="tag neutral">CLOSE CONFIRMATION</span>
+      </article>
+      <article class="engine-rule">
+        <div class="engine-rule-main">
+          <div class="engine-rule-title">02 · CAMPAIGN RISK ENGINE</div>
+          <div class="engine-rule-desc">5 ya 10 Positions open hon, phir bhi sabhi open Positions ka combined risk ek defined Campaign Risk Limit ke andar rahega. Limit reach hone par nayi Add-on Entry block hogi.</div>
+        </div>
+        <span class="tag neutral">TOTAL RISK CONTROL</span>
+      </article>
+      <article class="engine-rule">
+        <div class="engine-rule-main">
+          <div class="engine-rule-title">03 · HISTORICAL REPLAY ENGINE</div>
+          <div class="engine-rule-desc">Har purane Setup ko us waqt tak available candles aur information se simulate kiya jayega. Future candles ko past Entry ya Confirmation decide karne ke liye use nahi kiya jayega.</div>
+        </div>
+        <span class="tag neutral">POINT-IN-TIME REPLAY</span>
+      </article>
+    </div>
+    <div class="engine-rule-note">These are system design rules / specifications. Their live execution and campaign-wide risk enforcement must be implemented and validated separately before being treated as active trading controls.</div>
   </section>
   <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. Momentum continuation plans remain available in the Trade Level Board after confirmation; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trap cards replay the supplied Abhay Patil Black Box rules on all loaded closed candles: 20-left/20-right pivots, close-based fake break, recl  <div class="footer">Only the uploaded Abhay Patil Black Box rules are used: confirmed 20-left/20-right pivot support/resistance, close-based fake break, reclaim candle, stop-entry at reclaim high/low, opposite reclaim wick as stop loss and one 2R target. No BOS, CHOCH, displacement or liquidity-sweep confirmation filters are used. Historical results replay the available completed candles; where stop loss and target touch in the same OHLC candle, the replay assumes stop loss first. Backtests are not guaranteed live fills or future accuracy.</div>
 </div>
