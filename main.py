@@ -1183,18 +1183,27 @@ async def vantage_mt5_candles(request: Request) -> JSONResponse:
 @app.get("/api/scanner")
 async def scanner() -> dict[str, Any]:
     setups: list[dict[str, Any]] = []
+    momentum_setups: list[dict[str, Any]] = []
     asset_data: list[dict[str, Any]] = []
     for state in states.values():
         strategy = build_structure_snapshot(state)
         setups.extend(strategy.get("setups", []))
+        momentum_setups.extend(strategy.get("momentum_setups", []))
         asset_data.append({
             "asset": state.key,
             "timeframes": strategy.get("timeframes", {}),
             "zones": strategy.get("zones", []),
             "liquidity": strategy.get("liquidity", []),
             "events": strategy.get("events", []),
+            "momentum_setups": strategy.get("momentum_setups", []),
         })
-    return {"time": now_ms(), "assets": list(states.keys()), "setups": setups, "asset_data": asset_data}
+    return {
+        "time": now_ms(),
+        "assets": list(states.keys()),
+        "setups": setups,
+        "momentum_setups": momentum_setups,
+        "asset_data": asset_data,
+    }
 
 
 @app.get("/api/events")
