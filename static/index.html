@@ -503,7 +503,6 @@ function renderTrapSignals(assetData){
       const state=tfs[tf]||{};
       const ready=Boolean(state.ready);
       const trap=state.trap_setup||{};
-      const stats=trap.history||{};
       const signal=trap.current_signal||null;
       const plan=signal?.trade_plan||null;
       const active=signal?.status==='TRADE ACTIVE';
@@ -554,30 +553,9 @@ function renderTrapSignals(assetData){
         body='<div class="pa-empty">No current stop-entry or open trade. All available closed candles have been scanned on this timeframe.</div>';
       }
 
-      const historical='<div class="trap-history">'
-        +'<div class="trap-history-head">HISTORICAL REPLAY · '+(stats.bars_scanned??state.bars??0).toLocaleString()+' candles</div>'
-        +'<div class="trap-history-grid">'
-        +'<span>Traps <b>'+(stats.traps_detected??0)+'</b></span>'
-        +'<span>Orders filled <b>'+(stats.orders_filled??0)+'</b></span>'
-        +'<span>TP hits <b class="good-text">'+(stats.wins??0)+'</b></span>'
-        +'<span>SL hits <b class="bad-text">'+(stats.losses??0)+'</b></span>'
-        +'<span>Win rate <b>'+(stats.win_rate_pct===null||stats.win_rate_pct===undefined?'—':n(stats.win_rate_pct,2)+'%')+'</b></span>'
-        +'<span>Net result <b>'+n(stats.net_r??0,2)+'R</b></span>'
-        +'</div>'
-        +'<div class="pa-foot">Fake breaks '+(stats.fake_breaks_detected??0)
-        +' · pending '+(stats.pending_orders??0)
-        +' · active '+(stats.active_trades??0)
-        +' · data '+(trap.first_bar_time?time(trap.first_bar_time):'—')
-        +' → '+(trap.last_bar_time?time(trap.last_bar_time):'—')+'</div>'
-        +'</div>';
-
-      const recent=(trap.recent_traps||[]).slice(-10).reverse();
-      const recentHtml=recent.length
-        ? '<div class="trap-recent"><b>Recent historical traps</b>'+recent.map(row=>
-          '<div class="pa-watch-row"><span>'+row.trap_type+' · '+row.side+' · '+time(row.signal_time)
-          +' · Entry '+n(row.entry_trigger,digits)+'</span>'+tag(row.outcome||row.status,'neutral')+'</div>'
-        ).join('')+'</div>'
-        : '';
+      // Historical replay statistics and recent-trap list are intentionally hidden from the dashboard.
+      const historical='';
+      const recentHtml='';
 
       cards.push('<article class="pa-card">'
         +'<div class="pa-top"><span class="pa-time">'+assetName+' · '+tf.toUpperCase()+'</span>'+tag(status,kind)+'</div>'
