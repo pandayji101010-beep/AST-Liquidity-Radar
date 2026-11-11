@@ -287,6 +287,67 @@ class ASTStructureStrategy:
         return zones[-limit:]
 
     @staticmethod
+    def _make_trade_plan(
+        side: str,
+        entry_low: float,
+        entry_high: float,
+        stop_loss: float,
+        current_price: float | None,
+        source: str,
+    ) -> dict[str, Any] | None:
+        """Build price levels only after a setup has a confirmed trigger."""
+        if side not in ("BUY", "SELL"):
+            return None
+        values = (entry_low, entry_high, stop_loss)
+        if not all(math.isfinite(float(value)) and float(value) > 0 for value in values):
+            return None
+        low, high, stop = sorted((float(entry_low), float(entry_high)))[:2] if entry_low > entry_high else (float(entry_low), float(entry_high))
+        if high <= low:
+            return None
+        entry = (low + high) / 2.0
+        if side == "BUY" and stop >= low:
+            return None
+        if side == "SELL" and stop <= high:
+            return None
+
+        risk = abs(entry - stop)
+        if risk <= 0:
+            return None
+        direction = 1.0 if side == "BUY" else -1.0
+        tp1 = entry + direction * risk * 1.5
+        tp2 = entry + direction * risk * 2.0
+
+        entry_state = "WAIT FOR PRICE IN ENTRY ZONE"
+        if current_price is not None and math.isfinite(float(current_price)):
+            price = float(current_price)
+            if low <= price <= high:
+                entry_state = "PRICE INSIDE ENTRY ZONE"
+            elif side == "BUY" and price > high:
+                entry_state = "WAIT FOR PULLBACK"
+            elif side == "SELL" and price < low:
+                entry_state = "WAIT FOR PULLBACK"
+            else:
+                entry_state = "PRICE THROUGH ZONE — RECHECK SETUP"
+
+        return {
+            "side": side,
+            "source": source,
+            "entry_low": low,
+            "entry_high": high,
+            "entry_price": entry,
+            "stop_loss": stop,
+            "take_profit_1": tp1,
+            "take_profit_2": tp2,
+            "risk_per_unit": risk,
+            "risk_percent": risk / entry * 100.0,
+            "rr_1": 1.5,
+            "rr_2": 2.0,
+            "entry_state": entry_state,
+            "instruction": "Wait for price in the entry zone; do not chase if price has already moved away.",
+            "target_note": "TP1 and TP2 are fixed 1.5R / 2R planning targets, not guaranteed market destinations.",
+        }
+
+    @staticmethod
     def _setup_for_timeframe(
         timeframe: str,
         bars: list[dict[str, Any]],
@@ -368,6 +429,24 @@ class ASTStructureStrategy:
 
         entry_side = side if structure_ok else None
         candidate_side = side if side is not None and not structure_ok else None
+        trade_plan = None
+        if structure_ok and sweep is not None and matching_event is not None:
+            atr_values = ASTStructureStrategy._atr_values(bars)
+            sweep_index = int(sweep["bar_index"])
+            event_index = int(matching_event["bar_index"])
+            sweep_atr = atr_values[sweep_index] if sweep_index < len(atr_values) else 0.0
+            event_atr = atr_values[event_index] if event_index < len(atr_values) else 0.0
+            entry_buffer = max(event_atr * 0.10, 1e-12)
+            stop_buffer = max(sweep_atr * 0.12, 1e-12)
+            entry_level = float(matching_event["level"])
+            if side == "BUY":
+                stop = float(bars[sweep_index]["l"]) - stop_buffer
+            else:
+                stop = float(bars[sweep_index]["h"]) + stop_buffer
+            trade_plan = ASTStructureStrategy._make_trade_plan(
+                side, entry_level - entry_buffer, entry_level + entry_buffer,
+                stop, current_price, "LIQUIDITY REVERSAL",
+            )
         score = sum(bool(checks[key]) for key in (
             "liquidity_sweep", "displacement", "structure_break", "zone_confluence"
         )) * 25
@@ -383,6 +462,7 @@ class ASTStructureStrategy:
             "price": current_price,
             "checks": checks,
             "sweep_level": sweep["level"] if sweep else None,
+            "trade_plan": trade_plan,
             "reason": reason,
         }
     @staticmethod
@@ -483,6 +563,8 @@ class ASTStructureStrategy:
             "retest_rejection": False,
         }
         invalidated = False
+        retest_index = None
+        rejection_index = None
 
         for index in range(breakout_index + 1, len(bars)):
             candle = bars[index]
@@ -500,12 +582,29 @@ class ASTStructureStrategy:
                 rejected = touched and candle["c"] <= level and candle["c"] < candle["o"]
 
             if touched:
+                if retest_index is None:
+                    retest_index = index
                 checks["retest_touch"] = True
                 if rejected:
                     checks["retest_rejection"] = True
+                    rejection_index = index
                     break
 
         score = round(sum(checks.values()) / len(checks) * 100)
+        trade_plan = None
+        if rejection_index is not None:
+            rejection_bar = bars[rejection_index]
+            rejection_atr = atr[rejection_index] if rejection_index < len(atr) else breakout_atr
+            stop_buffer = max(rejection_atr * 0.12, 1e-12)
+            stop = (
+                float(rejection_bar["l"]) - stop_buffer
+                if side == "BUY"
+                else float(rejection_bar["h"]) + stop_buffer
+            )
+            trade_plan = ASTStructureStrategy._make_trade_plan(
+                side, level - tolerance, level + tolerance, stop,
+                current_price, "MOMENTUM CONTINUATION",
+            )
         common = {
             "engine": "MOMENTUM CONTINUATION",
             "entry_timeframe": timeframe,
@@ -521,6 +620,7 @@ class ASTStructureStrategy:
             "retest_zone_low": level - tolerance,
             "retest_zone_high": level + tolerance,
             "retest_age_bars": age,
+            "trade_plan": trade_plan,
             "checks": checks,
         }
 
@@ -575,7 +675,7 @@ class ASTStructureStrategy:
                     "major_trend": "NEUTRAL", "minor_trend": "NEUTRAL",
                     "major_event": None, "minor_event": None,
                     "setup": {"status": "WAITING", "side": None},
-                    "momentum_setup": {"status": "WAITING", "side": None, "candidate_side": None, "direction": None, "score": 0, "reason": "Need at least 30 valid candles."},
+                    "momentum_setup": {"status": "WAITING", "side": None, "candidate_side": None, "direction": None, "score": 0, "trade_plan": None, "reason": "Need at least 30 valid candles."},
                     "sweeps": [],
                 }
                 internals[tf] = None
@@ -620,13 +720,14 @@ class ASTStructureStrategy:
                 "major_trend": major["trend"], "minor_trend": minor["trend"],
                 "major_event": ui_event(major["latest_event"]),
                 "minor_event": ui_event(minor["latest_event"]),
-                "setup": {"status": setup["status"], "side": setup["side"] or setup["candidate_side"], "direction": setup["direction"], "score": setup["score"]},
+                "setup": {"status": setup["status"], "side": setup["side"] or setup["candidate_side"], "direction": setup["direction"], "score": setup["score"], "trade_plan": setup.get("trade_plan")},
                 "momentum_setup": {
                     "status": momentum_setup["status"],
                     "side": momentum_setup["side"] or momentum_setup["candidate_side"],
                     "direction": momentum_setup["direction"],
                     "score": momentum_setup["score"],
                     "breakout_level": momentum_setup["breakout_level"],
+                    "trade_plan": momentum_setup.get("trade_plan"),
                 },
                 "sweeps": [
                     {"type": item["type"], "side": item["side"], "level": item["level"], "time": item["time"]}
@@ -656,6 +757,7 @@ class ASTStructureStrategy:
                 "side": setup["side"] or setup["candidate_side"],
                 "direction": setup["direction"],
                 "score": setup["score"],
+                "trade_plan": setup.get("trade_plan"),
             }
             timeframe_results[tf]["momentum_setup"] = {
                 "status": momentum_setup["status"],
@@ -663,6 +765,7 @@ class ASTStructureStrategy:
                 "direction": momentum_setup["direction"],
                 "score": momentum_setup["score"],
                 "breakout_level": momentum_setup["breakout_level"],
+                "trade_plan": momentum_setup.get("trade_plan"),
             }
         result = {
             "timeframes": timeframe_results,
