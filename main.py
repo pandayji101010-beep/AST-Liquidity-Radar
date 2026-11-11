@@ -729,7 +729,7 @@ async def bootstrap_market_data() -> None:
                 rows = loaded["candles"].get(tf, [])
                 state.candles[tf].clear()
                 state.candles[tf].extend(rows[-HISTORY_BARS:])
-                state.latest_analysis[tf] = state.analyse(tf)
+                state.latest_analysis[tf] = await asyncio.to_thread(state.analyse, tf)
                 log.info("Loaded %s historical candles for %s %s from %s",
                          len(state.candles[tf]), key, tf, state.data_source)
 
@@ -784,7 +784,7 @@ async def gold_market_worker() -> None:
                 ordered = [merged[key] for key in sorted(merged)][-HISTORY_BARS:]
                 state.candles[tf].clear()
                 state.candles[tf].extend(ordered)
-                state.latest_analysis[tf] = state.analyse(tf)
+                state.latest_analysis[tf] = await asyncio.to_thread(state.analyse, tf)
 
             latest = loaded["latest"]
             state.mark_price = float(latest["c"])
@@ -1225,34 +1225,66 @@ async def vantage_mt5_candles(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid MT5 candle payload") from exc
 
 
+_trap_scanner_cache: dict[str, Any] | None = None
+_trap_scanner_cache_at = 0.0
+_trap_scanner_cache_lock: asyncio.Lock | None = None
+
+
 @app.get("/api/scanner")
 async def scanner() -> dict[str, Any]:
-    setups: list[dict[str, Any]] = []
-    momentum_setups: list[dict[str, Any]] = []
-    asset_data: list[dict[str, Any]] = []
-    for state in states.values():
-        strategy = build_structure_snapshot(state)
-        setups.extend(strategy.get("setups", []))
-        momentum_setups.extend(strategy.get("momentum_setups", []))
-        asset_data.append({
-            "asset": state.key,
-            "timeframes": strategy.get("timeframes", {}),
-            "zones": strategy.get("zones", []),
-            "liquidity": strategy.get("liquidity", []),
-            "events": strategy.get("events", []),
-            "momentum_setups": strategy.get("momentum_setups", []),
-            "trap_setups": strategy.get("trap_setups", []),
-            "trap_strategy": strategy.get("trap_strategy", {}),
-        })
-    return {
-        "time": now_ms(),
-        "assets": list(states.keys()),
-        "setups": setups,
-        "momentum_setups": momentum_setups,
-        "asset_data": asset_data,
-        "trap_setups": [setup for asset in asset_data for setup in asset.get("trap_setups", [])],
-    }
+    """Return only the uploaded Black Box trap strategy; cache briefly to avoid repeat replays."""
+    global _trap_scanner_cache, _trap_scanner_cache_at, _trap_scanner_cache_lock
+    loop = asyncio.get_running_loop()
+    if _trap_scanner_cache is not None and loop.time() - _trap_scanner_cache_at < 4.0:
+        return _trap_scanner_cache
 
+    if _trap_scanner_cache_lock is None:
+        _trap_scanner_cache_lock = asyncio.Lock()
+
+    async with _trap_scanner_cache_lock:
+        loop = asyncio.get_running_loop()
+        if _trap_scanner_cache is not None and loop.time() - _trap_scanner_cache_at < 4.0:
+            return _trap_scanner_cache
+
+        asset_data: list[dict[str, Any]] = []
+        trap_setups: list[dict[str, Any]] = []
+        for state in states.values():
+            trap_result = await asyncio.to_thread(
+                state.trap_engine.snapshot,
+                state.candles,
+            )
+            timeframes = {
+                timeframe: {
+                    "ready": bool(setup.get("ready")),
+                    "bars": int(setup.get("bars", setup.get("bars_scanned", 0)) or 0),
+                    "message": setup.get("message"),
+                    "trap_setup": setup,
+                }
+                for timeframe, setup in trap_result.get("timeframes", {}).items()
+            }
+            asset_data.append({
+                "asset": state.key,
+                "timeframes": timeframes,
+                "trap_setups": [
+                    {"asset": state.key, **setup}
+                    for setup in trap_result.get("timeframes", {}).values()
+                ],
+                "trap_strategy": {
+                    "strategy_name": trap_result.get("strategy_name"),
+                    "lookback": trap_result.get("lookback", 20),
+                    "rr_ratio": trap_result.get("rr_ratio", 2.0),
+                },
+            })
+            trap_setups.extend(asset_data[-1]["trap_setups"])
+
+        _trap_scanner_cache = {
+            "time": now_ms(),
+            "assets": list(states.keys()),
+            "asset_data": asset_data,
+            "trap_setups": trap_setups,
+        }
+        _trap_scanner_cache_at = loop.time()
+        return _trap_scanner_cache
 
 @app.get("/api/events")
 async def events() -> list[dict[str, Any]]:
