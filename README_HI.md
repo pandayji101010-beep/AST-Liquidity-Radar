@@ -29,7 +29,7 @@ Dashboard ka trap scanner uploaded Pine v5 file ke rules ko har available timefr
 - Backend maximum 25,000 closed candles per timeframe retain/replay karta hai. Actual count Vantage history availability, Binance archive availability aur MT5 terminal setting par depend karta hai.
 - Vantage MT5 mein Tools → Options → Charts → Max bars in chart ko kam-se-kam 25,000 set karein.
 - Latest mt5_bridge.py download karke bridge restart karein, taaki 25,000-bar history bootstrap ho. Dashboard par har card mein scanned candles aur first/last data time dikhte hain.
-- BTC 1m history Binance USD-M archive se aati hai; GOLD XAUUSD history directly Vantage MT5 se aati hai. Dono sources ko ek doosre ke prices ke saath mix nahi kiya jata.
+- BTC ke 1m, 5m, 15m, 30m, 1h, 4h aur 1d candles alag-alag native Binance USD-M archives se load hote hain; har timeframe par 25,000 closed candles tak replay hota hai. Native interval archive unavailable ho tabhi 1m se resampling fallback hoti hai. GOLD XAUUSD history directly Vantage MT5 se aati hai. Dono assets ke price sources mix nahi hote.
 
 ## Data source aur limitations
 
