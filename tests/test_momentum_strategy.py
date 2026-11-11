@@ -51,6 +51,17 @@ class MomentumContinuationTests(unittest.TestCase):
         self.assertEqual(setup["candidate_side"], "BUY")
         self.assertFalse(setup["checks"]["retest_touch"])
 
+    def test_non_rejection_retest_can_confirm_on_a_later_candle(self):
+        bars = base_candles()
+        bars.append({"t": 25 * 60_000, "o": 100.5, "h": 104.2, "l": 100.4, "c": 104.0, "v": 2.0})
+        bars.append({"t": 26 * 60_000, "o": 102.0, "h": 102.4, "l": 100.8, "c": 101.2, "v": 2.0})
+        bars.append({"t": 27 * 60_000, "o": 101.1, "h": 102.6, "l": 100.9, "c": 102.3, "v": 2.0})
+        setup = self.evaluate(bars)
+        self.assertEqual(setup["status"], "ENTRY CONFIRMED")
+        self.assertEqual(setup["side"], "BUY")
+        self.assertTrue(setup["checks"]["retest_touch"])
+        self.assertTrue(setup["checks"]["retest_rejection"])
+
     def test_fresh_breakout_is_watch_not_entry(self):
         bars = base_candles()
         bars.append({"t": 25 * 60_000, "o": 100.5, "h": 104.2, "l": 100.4, "c": 104.0, "v": 2.0})
