@@ -130,7 +130,7 @@ def sync_gold_candles(
     headers: dict[str, str],
     symbol: str,
     bootstrap: bool,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Send Vantage broker-native GOLD OHLC history and recent candle updates."""
     payload: dict[str, Any] = {
         "asset": "GOLD",
@@ -169,13 +169,19 @@ def sync_gold_candles(
     response.raise_for_status()
     result = response.json()
     counts = result.get("bars", {})
+    if result.get("needs_bootstrap"):
+        log.warning(
+            "GOLD %s | backend restarted and has no broker history; full bootstrap requested",
+            symbol,
+        )
+        return result
     log.info(
         "GOLD %s | Vantage broker candles synced | mode=%s | bars=%s",
         symbol,
         "history" if bootstrap else "recent",
         counts,
     )
-    return {str(key): int(value) for key, value in counts.items()}
+    return result
 
 
 def main() -> int:
@@ -227,8 +233,13 @@ def main() -> int:
 
             if now - last_candle_sync >= GOLD_CANDLE_SYNC_SECONDS:
                 try:
-                    sync_gold_candles(session, headers, gold_symbol, bootstrap=not candles_bootstrapped)
-                    candles_bootstrapped = True
+                    sync_result = sync_gold_candles(
+                        session, headers, gold_symbol, bootstrap=not candles_bootstrapped
+                    )
+                    if sync_result.get("needs_bootstrap"):
+                        candles_bootstrapped = False
+                    else:
+                        candles_bootstrapped = True
                 except Exception as exc:
                     log.warning("Could not sync Vantage GOLD candles: %s", exc)
                 last_candle_sync = now

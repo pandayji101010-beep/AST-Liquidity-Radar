@@ -1031,7 +1031,19 @@ def record_vantage_candles(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("timeframes must be an object keyed by supported timeframe")
 
     state = states["GOLD"]
-    replace_existing = bool(payload.get("replace", False)) or not state.broker_candle_feed
+    replace_existing = bool(payload.get("replace", False))
+    if not replace_existing and not state.broker_candle_feed:
+        # Render restarts clear in-memory OHLC history while the Windows bridge
+        # may remain running and keep sending only its incremental 2-bar sync.
+        # Ask the bridge for a full bootstrap instead of treating 2 bars as history.
+        return {
+            "asset": "GOLD",
+            "symbol": symbol,
+            "broker_candle_feed": False,
+            "needs_bootstrap": True,
+            "reason": "Backend has no broker candle history; send full OHLC bootstrap.",
+            "bars": {},
+        }
     if replace_existing:
         for candles in state.candles.values():
             candles.clear()
