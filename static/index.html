@@ -18,6 +18,19 @@
 .trade-board-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
 
 .price-action-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+
+.pa-asset-group+.pa-asset-group{margin-top:18px}
+.pa-asset-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:4px 0 9px;color:#dce7f1}
+.pa-asset-heading b{font-size:15px;letter-spacing:.07em}
+.pa-asset-heading span{font-size:9px;color:var(--muted);letter-spacing:.08em}
+.pa-asset-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pa-time{font-size:12px;font-weight:850;letter-spacing:.06em}
+.pa-trend{font-size:10px;color:var(--muted);margin:0 0 10px;line-height:1.5}
+.pa-empty{font-size:11px;color:var(--muted);line-height:1.55;background:#0c1825;border:1px dashed #31465d;border-radius:9px;padding:10px;margin-top:8px}
+.pa-watch-title{font-size:10px;font-weight:850;color:var(--amber);margin:8px 0 5px;letter-spacing:.06em}
+.pa-engine-plan+.pa-engine-plan{border-top:1px solid #26384b;padding-top:10px;margin-top:10px}
+.pa-plan-source{font-size:10px;color:var(--muted);font-weight:800;margin:7px 0}
+@media(max-width:700px){.pa-asset-grid{grid-template-columns:1fr;gap:8px}.pa-asset-heading{margin:2px 0 7px}.pa-card{padding:11px}}
 .pa-card{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
 .pa-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .pa-engine{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:800}
@@ -132,7 +145,7 @@
   </div>
 
   <section class="card full" id="tradeBoard">
-    <div class="head"><div><div class="asset">AST PRICE ACTION TRADE SIGNALS</div><div class="sub">Price-action BUY / SELL levels · BTC + GOLD · 1m, 5m, 15m, 30m, 1H, 4H, 1D</div></div><div class="tag neutral">ENTRY · SL · TP1 · TP2</div></div>
+    <div class="head"><div><div class="asset">AST PRICE ACTION TRADE SIGNALS</div><div class="sub">Every timeframe card · BTC + GOLD · BUY / SELL · Entry · SL · TP1 · TP2</div></div><div class="tag neutral">ENTRY · SL · TP1 · TP2</div></div>
     <div id="tradeLevels" class="price-action-grid"><div class="empty">Scanning price-action setups across all timeframes…</div></div>
   </section>
   <section class="card full" id="structureSection">
@@ -212,71 +225,125 @@ function renderAsset(id,a){
   `;
 }
 function renderPriceActionSignals(assetData){
+  const timeframeOrder=['1m','5m','15m','30m','1h','4h','1d'];
   if(!assetData || !assetData.length){
-    $('tradeLevels').innerHTML='<div class="empty">Waiting for BTC and GOLD price-action candles…</div>';
+    $('tradeLevels').innerHTML='<div class="empty">Waiting for BTC and GOLD candle data…</div>';
     return;
   }
-  const order=['1m','5m','15m','30m','1h','4h','1d'];
-  const confirmed=[];
-  const watching=[];
-  for(const asset of assetData){
+
+  const assetOrder=['BTC','GOLD'];
+  const assetMap=new Map(assetData.map(item=>[item.asset,item]));
+  const groups=[];
+
+  for(const assetName of assetOrder){
+    const asset=assetMap.get(assetName);
+    if(!asset) continue;
     const tfs=asset.timeframes||{};
-    for(const tf of order){
+    const digits=assetName==='BTC'?1:3;
+    const cards=[];
+
+    for(const tf of timeframeOrder){
       const state=tfs[tf]||{};
+      const ready=Boolean(state.ready);
+      const reversal=state.setup||{};
+      const momentum=state.momentum_setup||{};
       const engines=[
-        {name:'LIQUIDITY REVERSAL',setup:state.setup||{}},
-        {name:'MOMENTUM CONTINUATION',setup:state.momentum_setup||{}}
+        {name:'LIQUIDITY REVERSAL',setup:reversal},
+        {name:'MOMENTUM CONTINUATION',setup:momentum}
       ];
-      for(const engine of engines){
-        const setup=engine.setup;
-        const plan=setup.trade_plan||null;
-        const item={asset:asset.asset,tf,engine:engine.name,setup,plan};
-        if(setup.status==='ENTRY CONFIRMED' && plan && (plan.side==='BUY'||plan.side==='SELL')){
-          confirmed.push(item);
-        }else if(['LIQUIDITY SWEPT','SETUP FORMING','BREAKOUT WATCH','RETEST PENDING','RETEST TESTING'].includes(setup.status)){
-          watching.push(item);
-        }
+      const confirmed=engines.filter(item=>
+        item.setup.status==='ENTRY CONFIRMED' &&
+        item.setup.trade_plan &&
+        ['BUY','SELL'].includes(item.setup.trade_plan.side)
+      );
+      const pending=engines.filter(item=>
+        ['LIQUIDITY SWEPT','SETUP FORMING','BREAKOUT WATCH','RETEST PENDING','RETEST TESTING'].includes(item.setup.status)
+      );
+      const confirmedSides=[...new Set(confirmed.map(item=>item.setup.trade_plan.side))];
+      const conflict=confirmedSides.length>1;
+      const headingState=!ready?'WARMING UP':
+        conflict?'MIXED / WAIT':
+        confirmed.length?'ENTRY CONFIRMED':
+        pending.length?'SETUP WATCH':'WAITING';
+      const headingKind=!ready||headingState==='WAITING'?'neutral':
+        conflict?'warn':confirmed.length?'good':'warn';
+
+      let signalTitle='NO TRADE';
+      let signalColor='var(--muted)';
+      if(confirmed.length && !conflict){
+        signalTitle=confirmedSides[0];
+        signalColor=signalTitle==='BUY'?'var(--green)':'var(--red)';
+      }else if(pending.length){
+        const candidates=[...new Set(pending
+          .map(item=>item.setup.side||item.setup.candidate_side)
+          .filter(side=>side==='BUY'||side==='SELL'))];
+        signalTitle=candidates.length===1?candidates[0]+' CANDIDATE':
+          candidates.length>1?'MIXED CANDIDATES':'WAIT FOR DIRECTION';
+        signalColor=candidates.length===1?(candidates[0]==='BUY'?'var(--green)':'var(--red)'):'var(--amber)';
       }
+
+      const planBlocks=(!conflict?confirmed:[]).map(item=>{
+        const plan=item.setup.trade_plan;
+        const side=plan.side;
+        const stateKind=plan.entry_state==='PRICE INSIDE ENTRY ZONE'?'good':
+          plan.entry_state==='PRICE THROUGH ZONE — RECHECK SETUP'?'bad':'warn';
+        return '<div class="pa-engine-plan">'
+          + '<div class="pa-plan-source">'+item.name+'</div>'
+          + '<div class="pa-state '+stateKind+'">'+plan.entry_state+'</div>'
+          + '<div class="pa-levels">'
+          + '<div class="pa-level entry"><div class="k">'+side+' entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
+          + '<div class="pa-level stop"><div class="k">Stop loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
+          + '<div class="pa-level target"><div class="k">TP1 · 1.5R</div><div class="v">'+n(plan.take_profit_1,digits)+'</div></div>'
+          + '<div class="pa-level target"><div class="k">TP2 · 2R</div><div class="v">'+n(plan.take_profit_2,digits)+'</div></div>'
+          + '</div>'
+          + '<div class="pa-foot">Entry reference '+n(plan.entry_price,digits)+' · risk '+n(plan.risk_percent,2)+'% of entry. '+plan.instruction+' Targets are planning levels, not guaranteed destinations.</div>'
+          + '</div>';
+      }).join('');
+
+      const pendingBlocks=pending.map(item=>{
+        const setup=item.setup;
+        const direction=setup.side||setup.candidate_side||'—';
+        const level=setup.breakout_level??setup.sweep_level;
+        const levelText=level===null||level===undefined?'':' · Level '+n(level,digits);
+        return '<div class="pa-watch-row"><span><b>'+item.name+'</b> · '+direction+levelText+'</span>'+tag(setup.status,'warn')+'</div>';
+      }).join('');
+
+      let body='';
+      if(!ready){
+        body='<div class="pa-empty">Data warming up · '+(state.bars||0)+' / 30 candles</div>';
+      }else if(conflict){
+        body='<div class="pa-empty">Both engines show opposite confirmed directions on this timeframe. Wait; no combined trade plan is issued.</div>';
+      }else if(planBlocks){
+        body=planBlocks;
+      }else if(pendingBlocks){
+        body='<div class="pa-watch-title">CONFIRMATION PENDING</div>'+pendingBlocks
+          +'<div class="pa-empty">Wait for confirmation. Entry, SL and TP are not issued yet.</div>';
+      }else{
+        body='<div class="pa-empty">No active Price Action setup on this timeframe. Waiting for a valid trigger.</div>';
+      }
+
+      const trend=ready
+        ? '<div class="pa-trend">Major '+(state.major_trend||'NEUTRAL')+' · Minor '+(state.minor_trend||'NEUTRAL')+' · Closed bars '+(state.bars||0)+'</div>'
+        : '<div class="pa-trend">'+(state.message||'Waiting for candle history')+'</div>';
+
+      cards.push('<article class="pa-card">'
+        + '<div class="pa-top"><span class="pa-time">'+assetName+' · '+tf.toUpperCase()+'</span>'+tag(headingState,headingKind)+'</div>'
+        + '<div class="pa-signal" style="color:'+signalColor+'">'+signalTitle+'</div>'
+        + trend
+        + body
+        + '</article>');
     }
+
+    groups.push('<section class="pa-asset-group">'
+      + '<div class="pa-asset-heading"><b>'+assetName+'</b><span>ALL 7 TIMEFRAMES · 1M TO 1D</span></div>'
+      + '<div class="pa-asset-grid">'+cards.join('')+'</div>'
+      + '</section>');
   }
-  const cards=confirmed.map(item=>{
-    const {asset,tf,engine,setup,plan}=item;
-    const digits=asset==='BTC'?1:3;
-    const side=plan.side;
-    const sideColor=side==='BUY'?'var(--green)':'var(--red)';
-    const stateKind=plan.entry_state==='PRICE INSIDE ENTRY ZONE'?'good':plan.entry_state==='PRICE THROUGH ZONE — RECHECK SETUP'?'bad':'warn';
-    return '<article class="pa-card">'
-      + '<div class="pa-top"><span class="pa-engine">'+engine+' · '+asset+' · '+tf.toUpperCase()+'</span>'+tag('ENTRY CONFIRMED','good')+'</div>'
-      + '<div class="pa-signal" style="color:'+sideColor+'">'+side+' · ENTRY CONFIRMED</div>'
-      + '<div class="pa-state '+stateKind+'">'+plan.entry_state+'</div>'
-      + '<div class="pa-levels">'
-      + '<div class="pa-level entry"><div class="k">'+side+' entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
-      + '<div class="pa-level stop"><div class="k">Stop loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
-      + '<div class="pa-level target"><div class="k">TP1 · 1.5R</div><div class="v">'+n(plan.take_profit_1,digits)+'</div></div>'
-      + '<div class="pa-level target"><div class="k">TP2 · 2R</div><div class="v">'+n(plan.take_profit_2,digits)+'</div></div>'
-      + '</div>'
-      + '<div class="pa-foot">Entry reference '+n(plan.entry_price,digits)+' · risk '+n(plan.risk_percent,2)+'% of entry. '+plan.instruction+' Targets are planning levels, not guaranteed price destinations.</div>'
-      + '</article>';
-  });
 
-  const watchRows=watching.map(item=>{
-    const {asset,tf,engine,setup}=item;
-    const direction=setup.side||setup.candidate_side||setup.direction||'—';
-    const digits=asset==='BTC'?1:3;
-    const level=setup.breakout_level??setup.sweep_level;
-    const price=level===null||level===undefined?'':' · Level '+n(level,digits);
-    return '<div class="pa-watch-row"><span><b>'+asset+' · '+tf.toUpperCase()+'</b> · '+engine+' · '+direction+price+'</span>'+tag(setup.status,'warn')+'</div>';
-  });
-
-  const noTrades=cards.length
-    ? cards.join('')
-    : '<div class="empty">Abhi koi confirmed Price Action trade nahi hai. Setup confirm hone par Entry, SL aur TP levels yahan show honge. Pending setups ko trade signal nahi maana jayega.</div>';
-  const watchBlock=watchRows.length
-    ? '<div class="pa-watching"><div class="pa-watching-title">WATCHLIST · CONFIRMATION PENDING</div>'+watchRows.join('')+'</div>'
-    : '';
-  $('tradeLevels').innerHTML=noTrades+watchBlock;
+  $('tradeLevels').innerHTML=groups.length
+    ? groups.join('')
+    : '<div class="empty">BTC and GOLD timeframe data is not available yet.</div>';
 }
-
 
 function eventLabel(e){return e?`${e.event} ${e.side} @ ${n(e.level,3)}`:'—'}
 function renderStructure(assetData){
