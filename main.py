@@ -1123,18 +1123,36 @@ def record_vantage_candles(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    global http_client
-    http_client = httpx.AsyncClient(headers={"User-Agent": "AST-Liquidity-Radar/1.0"})
-    await bootstrap_market_data()
+async def initialize_market_data_and_workers() -> None:
+    """Load historical archives after the web server is already accepting requests."""
+    try:
+        await bootstrap_market_data()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Keep the dashboard API available when an upstream history source fails.
+        log.exception("Historical bootstrap failed; starting live market workers anyway")
+
     background_tasks.extend([
         asyncio.create_task(market_stream_worker(), name="binance-market"),
         asyncio.create_task(depth_stream_worker(), name="binance-depth"),
         asyncio.create_task(rest_metrics_worker(), name="binance-rest-metrics"),
         asyncio.create_task(gold_market_worker(), name="gold-reference-feed"),
     ])
-    log.info("AST Liquidity Radar started: BTCUSDT Binance Futures + XAUUSD reference feed")
+    log.info("AST Liquidity Radar market workers started")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    global http_client
+    http_client = httpx.AsyncClient(headers={"User-Agent": "AST-Liquidity-Radar/1.0"})
+    # Do not block Render's startup health check while archive candles are downloaded.
+    bootstrap_task = asyncio.create_task(
+        initialize_market_data_and_workers(),
+        name="historical-bootstrap",
+    )
+    background_tasks.append(bootstrap_task)
+    log.info("AST Liquidity Radar API ready; historical bootstrap running in background")
 
 
 @app.on_event("shutdown")
