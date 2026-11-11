@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from ast_strategy import ASTStructureStrategy
 from abhay_patil_trap_strategy import AbhayPatilBlackBoxTrapStrategy
 from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
+from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -120,6 +121,7 @@ class AssetState:
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
     trap_engine: AbhayPatilBlackBoxTrapStrategy = field(default_factory=AbhayPatilBlackBoxTrapStrategy)
+    campaign_engine: ASTInstitutionalCampaignStrategy = field(default_factory=ASTInstitutionalCampaignStrategy)
     data_source: str | None = None
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
@@ -1286,6 +1288,49 @@ async def scanner() -> dict[str, Any]:
         _trap_scanner_cache_at = loop.time()
         return _trap_scanner_cache
 
+_campaign_scanner_cache: dict[str, Any] | None = None
+_campaign_scanner_cache_at = 0.0
+_campaign_scanner_cache_lock: asyncio.Lock | None = None
+
+
+@app.get("/api/campaign")
+async def campaign_scanner() -> dict[str, Any]:
+    """Return point-in-time multi-timeframe analysis and simulated 1m campaigns."""
+    global _campaign_scanner_cache, _campaign_scanner_cache_at, _campaign_scanner_cache_lock
+    loop = asyncio.get_running_loop()
+    if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 5.0:
+        return _campaign_scanner_cache
+
+    if _campaign_scanner_cache_lock is None:
+        _campaign_scanner_cache_lock = asyncio.Lock()
+
+    async with _campaign_scanner_cache_lock:
+        loop = asyncio.get_running_loop()
+        if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 5.0:
+            return _campaign_scanner_cache
+
+        assets: list[dict[str, Any]] = []
+        for state in states.values():
+            result = await asyncio.to_thread(
+                state.campaign_engine.snapshot,
+                state.candles,
+                state.key,
+            )
+            result["data_source"] = state.data_source or "Source not reported"
+            result["broker_candle_feed"] = bool(state.broker_candle_feed)
+            result["broker_candle_time"] = state.broker_candle_ts
+            result["live_reference_price"] = state.mark_price
+            assets.append(result)
+
+        _campaign_scanner_cache = {
+            "time": now_ms(),
+            "strategy_name": "AST Multi-Timeframe Institutional Trap & Continuous Pyramiding",
+            "assets": assets,
+        }
+        _campaign_scanner_cache_at = loop.time()
+        return _campaign_scanner_cache
+
+
 @app.get("/api/events")
 async def events() -> list[dict[str, Any]]:
     combined: list[dict[str, Any]] = []
@@ -1300,7 +1345,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "Uploaded Abhay Patil Black Box: 20/20 pivots, close fake-break, reclaim candle, stop-entry, wick stop and one 1:2 TP; major/minor analytics remain in the background.",
+        "strategy": "AST Multi-Timeframe Institutional Trap & Continuous Pyramiding: Monthly/weekly/daily/4h/1h/30m/15m/5m context, confirmed 1m sweep/rejection + MSS/BOS + displacement + FVG/OB retest, main and add-on campaign entries, risk controls and point-in-time replay.",
         "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
         "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
@@ -1312,5 +1357,10 @@ async def config() -> dict[str, Any]:
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
             "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
+            "Campaign engine replays completed 1m candles sequentially; higher-timeframe candles are exposed only after their own close timestamp.",
+            "1W and 1M context are aggregated from completed daily candles; no incomplete calendar period is used for confirmation.",
+            "1m plans are emitted after a completed signal candle and simulated at the next 1m open; the backend does not place broker orders.",
+            "Campaign defaults: 0.20% risk allocation per position, 1.50% maximum campaign risk, 10 concurrent positions and 2.00% daily loss pause; configure with AST_CAMPAIGN_* environment variables.",
+            "Trade size is not calculated unless account equity, contract size and broker tick-value settings are configured.",
         ],
     }

@@ -436,6 +436,41 @@ body{
   .engine-rule-desc{font-size:11px}
 }
 
+
+/* Live campaign execution board */
+.campaign-assets{display:grid;grid-template-columns:1fr;gap:11px;margin-top:13px}
+.campaign-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
+.campaign-asset-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.campaign-asset-name{font-size:15px;font-weight:900;letter-spacing:.07em}
+.campaign-price-line{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:7px;font-size:11px;color:var(--muted)}
+.campaign-status-line{margin-top:11px;padding:10px 12px;border:1px solid #26384b;background:#0c1825;border-radius:10px;font-size:12px;line-height:1.5;color:#c1d0de}
+.campaign-position-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.campaign-position{border:1px solid #2b4055;background:#0c1825;border-radius:11px;padding:11px;min-width:0}
+.campaign-position-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.campaign-position-title{font-size:11px;font-weight:850;letter-spacing:.04em}
+.campaign-levels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.campaign-level{background:#101d2b;border:1px solid #26384b;border-radius:8px;padding:8px;min-width:0}
+.campaign-level .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.campaign-level .v{font-size:15px;font-weight:850;font-variant-numeric:tabular-nums;margin-top:4px;overflow-wrap:anywhere}
+.campaign-level.entry .v{color:var(--cyan)}
+.campaign-level.stop .v{color:var(--red)}
+.campaign-level.target .v{color:var(--green)}
+.campaign-meta{font-size:10px;color:var(--muted);line-height:1.55;margin-top:8px}
+.campaign-tf-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.campaign-tf{padding:5px 7px;border:1px solid #26384b;background:#0c1825;border-radius:7px;font-size:9px;color:var(--muted)}
+.campaign-tf b{color:#e8f0f7;margin-left:3px}
+.campaign-tf.buy b{color:var(--green)}
+.campaign-tf.sell b{color:var(--red)}
+.campaign-tf.neutral b{color:var(--amber)}
+.campaign-foot{font-size:10px;color:var(--muted);line-height:1.55;margin-top:9px}
+@media(max-width:700px){
+ .campaign-asset{padding:11px}
+ .campaign-position-grid{grid-template-columns:1fr;gap:7px}
+ .campaign-position{padding:10px}
+ .campaign-level .v{font-size:14px}
+ .campaign-status-line{font-size:11px}
+}
+
 </style>
 </head>
 <body>
@@ -445,42 +480,16 @@ body{
     <div class="controls"><div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting trap scanner…</span></div></div>
   </div>
 
+  <section class="card full" id="campaignSection">
+    <div class="head">
+      <div><div class="asset">1M CAMPAIGN EXECUTION</div><div class="sub">Higher-timeframe bias → 1m main entry → confirmed pullback add-ons · Entry / SL / TP prices</div></div>
+      <div class="tag neutral">BTC + GOLD</div>
+    </div>
+    <div id="campaignSignals" class="campaign-assets"><div class="empty">Loading multi-timeframe campaign analysis…</div></div>
+  </section>
   <section class="card full" id="trapSection">
     <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">Uploaded PDF strategy only · BTC + GOLD · 1m to 1D · 20/20 pivot support/resistance · close break + reclaim · stop-entry · wick SL · one TP at 1:2</div></div><div class="tag neutral">14 TIMEFRAME CARDS</div></div>
     <div id="trapSignals" class="price-action-grid"><div class="empty">Connecting to Trap scanner and loading candle history…</div></div>
-  </section>
-  <section class="card full" id="engineRules">
-    <div class="head">
-      <div>
-        <div class="asset">CORE SYSTEM ENGINES</div>
-        <div class="sub">Multi-timeframe confirmation · Campaign-level risk · Point-in-time historical replay</div>
-      </div>
-      <div class="tag neutral">ENGINE RULES</div>
-    </div>
-    <div class="engine-rule-list">
-      <article class="engine-rule">
-        <div class="engine-rule-main">
-          <div class="engine-rule-title">01 · NON-REPAINTING ENGINE</div>
-          <div class="engine-rule-desc">Higher Timeframe ki confirmation candle tabhi valid hogi jab woh completely close ho. Running / incomplete candle par final confirmation nahi milegi.</div>
-        </div>
-        <span class="tag neutral">CLOSE CONFIRMATION</span>
-      </article>
-      <article class="engine-rule">
-        <div class="engine-rule-main">
-          <div class="engine-rule-title">02 · CAMPAIGN RISK ENGINE</div>
-          <div class="engine-rule-desc">5 ya 10 Positions open hon, phir bhi sabhi open Positions ka combined risk ek defined Campaign Risk Limit ke andar rahega. Limit reach hone par nayi Add-on Entry block hogi.</div>
-        </div>
-        <span class="tag neutral">TOTAL RISK CONTROL</span>
-      </article>
-      <article class="engine-rule">
-        <div class="engine-rule-main">
-          <div class="engine-rule-title">03 · HISTORICAL REPLAY ENGINE</div>
-          <div class="engine-rule-desc">Har purane Setup ko us waqt tak available candles aur information se simulate kiya jayega. Future candles ko past Entry ya Confirmation decide karne ke liye use nahi kiya jayega.</div>
-        </div>
-        <span class="tag neutral">POINT-IN-TIME REPLAY</span>
-      </article>
-    </div>
-    <div class="engine-rule-note">These are system design rules / specifications. Their live execution and campaign-wide risk enforcement must be implemented and validated separately before being treated as active trading controls.</div>
   </section>
   <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. Momentum continuation plans remain available in the Trade Level Board after confirmation; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trap cards replay the supplied Abhay Patil Black Box rules on all loaded closed candles: 20-left/20-right pivots, close-based fake break, recl  <div class="footer">Only the uploaded Abhay Patil Black Box rules are used: confirmed 20-left/20-right pivot support/resistance, close-based fake break, reclaim candle, stop-entry at reclaim high/low, opposite reclaim wick as stop loss and one 2R target. No BOS, CHOCH, displacement or liquidity-sweep confirmation filters are used. Historical results replay the available completed candles; where stop loss and target touch in the same OHLC candle, the replay assumes stop loss first. Backtests are not guaranteed live fills or future accuracy.</div>
 </div>
@@ -550,6 +559,87 @@ function renderAsset(id,a){
     ${a.error?`<div class="small" style="color:var(--red);margin-top:8px">Feed warning: ${a.error}</div>`:''}
   `;
 }
+
+function renderCampaigns(payload){
+  const root=$('campaignSignals');
+  const assets=payload?.assets||[];
+  if(!assets.length){
+    root.innerHTML='<div class="empty">Campaign engine is waiting for BTC/GOLD 1m candles.</div>';
+    return;
+  }
+  const digitsFor=asset=>asset==='BTC'?1:3;
+  const renderLevel=(label,value,digits,kind='')=>
+    '<div class="campaign-level '+kind+'"><div class="k">'+label+'</div><div class="v">'+(value===null||value===undefined?'—':n(value,digits))+'</div></div>';
+
+  root.innerHTML=assets.map(a=>{
+    const digits=digitsFor(a.asset);
+    const alignment=a.alignment||{};
+    const campaign=a.campaign||{};
+    const execution=a.execution_1m||null;
+    const positions=(campaign.positions||[]).filter(p=>p.status==='OPEN');
+    const side=execution?.side||campaign.side||alignment.candidate_side||null;
+    const sideKind=side==='BUY'?'good':side==='SELL'?'bad':'neutral';
+    const statusText=execution?.status||a.status||'WAITING';
+    const statusKind=statusText.includes('READY')?'good':
+      statusText.includes('ACTIVE')?'good':
+      statusText.includes('WAITING')?'warn':'neutral';
+    const price=a.live_reference_price;
+    const sourceNote=a.asset==='GOLD'&&!a.broker_candle_feed
+      ? 'Gold reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.'
+      : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USD-M BTCUSDT candles.');
+    let cards='';
+
+    if(execution && execution.status==='ENTRY READY · NEXT 1M OPEN'){
+      cards+='<article class="campaign-position">'
+        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(execution.kind||'ENTRY')+' · 1M '+(execution.side||'')+'</span>'+tag(execution.grade||'SETUP',execution.score>=80?'good':'warn')+'</div>'
+        +'<div class="campaign-levels">'
+        +renderLevel('Planned entry',execution.entry_price,digits,'entry')
+        +renderLevel('Stop loss',execution.stop_loss,digits,'stop')
+        +renderLevel('Partial TP · 1R',execution.partial_take_profit,digits,'target')
+        +renderLevel('Final TP · Liquidity',execution.take_profit,digits,'target')
+        +'</div>'
+        +'<div class="campaign-meta">Score '+n(execution.score,1)+'/100 · Target '+n(execution.target_r,2)+'R · Risk allocation '+n(execution.risk_pct,2)+'%<br>'+execution.execution+'</div>'
+        +'</article>';
+    }
+    if(positions.length){
+      cards+=positions.map((p,index)=>
+        '<article class="campaign-position">'
+        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(p.kind||'POSITION')+' · '+p.side+' · #'+(index+1)+'</span>'+tag(p.management||p.status,p.partial_taken?'good':'neutral')+'</div>'
+        +'<div class="campaign-levels">'
+        +renderLevel('Entry',p.entry_price,digits,'entry')
+        +renderLevel('Current SL',p.stop_loss,digits,'stop')
+        +renderLevel('Partial TP · 1R',p.partial_take_profit,digits,'target')
+        +renderLevel('Final TP',p.take_profit,digits,'target')
+        +'</div>'
+        +'<div class="campaign-meta">Risk allocation '+n(p.risk_pct,2)+'% · Setup score '+n(p.score,1)+'/100 · '+p.management+'</div>'
+        +'</article>'
+      ).join('');
+    }
+    if(!cards){
+      cards='<div class="campaign-status-line">'+(a.reason||'Waiting for the next valid 1m setup.')+'</div>';
+    }
+
+    const tfHtml=Object.entries(a.higher_timeframes||{}).map(([tf,data])=>{
+      const direction=data?.side||'—';
+      const cls=direction==='BUY'?'buy':direction==='SELL'?'sell':'neutral';
+      return '<span class="campaign-tf '+cls+'">'+tf+' <b>'+direction+'</b></span>';
+    }).join('');
+
+    const riskLine='Campaign risk '+n(campaign.risk_pct||0,2)+'% / '+n(campaign.max_risk_pct||0,2)
+      +'% · Open positions '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10)
+      +' · HTF agreement '+n(alignment.agreement_pct||0,1)+'%';
+    const replay=a.replay||{};
+    return '<section class="campaign-asset">'
+      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b>'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
+      +'<div class="campaign-position-grid">'+cards+'</div>'
+      +'<div class="campaign-meta">'+riskLine+'</div>'
+      +'<div class="campaign-tf-row">'+tfHtml+'</div>'
+      +'<div class="campaign-foot">'+sourceNote+' Replay: '+n(replay.bars_processed||0,0)+' completed 1m candles · '+(replay.lookahead_safe?'point-in-time replay':'replay status unavailable')+'. Signals are simulated plans, not broker orders.</div>'
+      +(campaign.can_add_position?'':campaign.status==='ACTIVE'?'<div class="campaign-foot">Add-on entries are currently blocked by campaign limits or position availability.</div>':'')
+      +'</section>';
+  }).join('');
+}
+
 function renderTrapSignals(assetData){
   if(!assetData || !assetData.length){
     $('trapSignals').innerHTML='<div class="empty">Waiting for BTC and GOLD trap-history candles…</div>';
@@ -673,11 +763,13 @@ async function refresh(){
   if(refreshInFlight) return;
   refreshInFlight=true;
   try{
-    const [health,scanner]=await Promise.all([
+    const [health,scanner,campaign]=await Promise.all([
       fetchJson('/api/health'),
-      fetchJson('/api/scanner')
+      fetchJson('/api/scanner'),
+      fetchJson('/api/campaign')
     ]);
     renderTrapSignals(scanner.asset_data);
+    renderCampaigns(campaign);
     $('connDot').className='dot '+(health.market_stream_connected?'on':'off');
     $('connText').textContent=health.market_stream_connected
       ? 'API connected · market feed live'
@@ -685,7 +777,7 @@ async function refresh(){
   }catch(e){
     $('connDot').className='dot off';
     $('connText').textContent='Trap API reconnecting…';
-    console.error('AST Trap dashboard refresh failed:',e);
+    console.error('AST campaign dashboard refresh failed:',e);
   }finally{
     refreshInFlight=false;
   }
