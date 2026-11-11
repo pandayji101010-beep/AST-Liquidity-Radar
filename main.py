@@ -1343,14 +1343,14 @@ async def campaign_alert_worker() -> None:
                     if alert_id not in seen:
                         side = execution.get("side") or "TRADE"
                         message = (
-                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\\n"
-                            f"{side} {execution.get('kind') or 'ENTRY'} SETUP CONFIRMED · 1M\\n"
-                            f"Planned Entry: {_campaign_alert_price(asset, execution.get('entry_price'))}\\n"
-                            f"Stop Loss: {_campaign_alert_price(asset, execution.get('stop_loss'))}\\n"
-                            f"Partial TP (1R): {_campaign_alert_price(asset, execution.get('partial_take_profit'))}\\n"
-                            f"Final TP: {_campaign_alert_price(asset, execution.get('take_profit'))}\\n"
-                            f"Score: {execution.get('score', '—')} | Target: {execution.get('target_r', '—')}R\\n"
-                            "Status: Waiting for next 1m open validation.\\n"
+                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\n"
+                            f"{side} {execution.get('kind') or 'ENTRY'} SETUP CONFIRMED · 1M\n"
+                            f"Planned Entry: {_campaign_alert_price(asset, execution.get('entry_price'))}\n"
+                            f"Stop Loss: {_campaign_alert_price(asset, execution.get('stop_loss'))}\n"
+                            f"Partial TP (1R): {_campaign_alert_price(asset, execution.get('partial_take_profit'))}\n"
+                            f"Final TP: {_campaign_alert_price(asset, execution.get('take_profit'))}\n"
+                            f"Score: {execution.get('score', '—')} | Target: {execution.get('target_r', '—')}R\n"
+                            "Status: Waiting for next 1m open validation.\n"
                             "SIMULATED PLAN ONLY — no broker order is placed."
                         )
                         if await send_telegram(message):
@@ -1364,13 +1364,13 @@ async def campaign_alert_worker() -> None:
                     fill_id = f"fill:{position_id}"
                     if fill_id not in seen:
                         message = (
-                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\\n"
-                            f"{position.get('side', 'TRADE')} {position.get('kind', 'ENTRY')} · SIMULATED FILL CONFIRMED\\n"
-                            f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\\n"
-                            f"SL: {_campaign_alert_price(asset, position.get('stop_loss'))}\\n"
-                            f"Partial TP: {_campaign_alert_price(asset, position.get('partial_take_profit'))}\\n"
-                            f"Final TP: {_campaign_alert_price(asset, position.get('take_profit'))}\\n"
-                            f"Quantity: {_campaign_alert_quantity(position.get('quantity'))}\\n"
+                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\n"
+                            f"{position.get('side', 'TRADE')} {position.get('kind', 'ENTRY')} · SIMULATED FILL CONFIRMED\n"
+                            f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\n"
+                            f"SL: {_campaign_alert_price(asset, position.get('stop_loss'))}\n"
+                            f"Partial TP: {_campaign_alert_price(asset, position.get('partial_take_profit'))}\n"
+                            f"Final TP: {_campaign_alert_price(asset, position.get('take_profit'))}\n"
+                            f"Quantity: {_campaign_alert_quantity(position.get('quantity'))}\n"
                             "SIMULATED FILL ONLY — this dashboard does not place a broker order."
                         )
                         if await send_telegram(message):
@@ -1379,8 +1379,8 @@ async def campaign_alert_worker() -> None:
                     partial_id = f"partial:{position_id}"
                     if position.get("partial_taken") and partial_id not in seen:
                         message = (
-                            f"AST CAMPAIGN UPDATE | {asset}\\n"
-                            f"{position.get('side', 'TRADE')} PARTIAL TARGET HIT\\n"
+                            f"AST CAMPAIGN UPDATE | {asset}\n"
+                            f"{position.get('side', 'TRADE')} PARTIAL TARGET HIT\n"
                             "50% partial booking simulated at 1R; remaining stop moved to breakeven."
                         )
                         if await send_telegram(message):
@@ -1392,11 +1392,11 @@ async def campaign_alert_worker() -> None:
                     if not position_id or close_id in seen:
                         continue
                     message = (
-                        f"AST CAMPAIGN EXIT | {asset}\\n"
-                        f"{position.get('side', 'TRADE')} · {position.get('status', 'CLOSED')}\\n"
-                        f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\\n"
-                        f"Exit: {_campaign_alert_price(asset, position.get('exit_price'))}\\n"
-                        f"Result: {position.get('result_r', '—')}R\\n"
+                        f"AST CAMPAIGN EXIT | {asset}\n"
+                        f"{position.get('side', 'TRADE')} · {position.get('status', 'CLOSED')}\n"
+                        f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\n"
+                        f"Exit: {_campaign_alert_price(asset, position.get('exit_price'))}\n"
+                        f"Result: {position.get('result_r', '—')}R\n"
                         "This is a simulated strategy result, not a broker execution."
                     )
                     if await send_telegram(message):

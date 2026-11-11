@@ -118,7 +118,7 @@ class ASTCampaignEngine:
         self.closed.append({
             key: position.get(key) for key in (
                 "id", "kind", "side", "entry_price", "stop_loss", "take_profit",
-                "status", "result_r", "entry_time", "exit_time", "risk_pct",
+                "status", "result_r", "entry_time", "exit_time", "exit_price", "risk_pct",
             )
         })
 
