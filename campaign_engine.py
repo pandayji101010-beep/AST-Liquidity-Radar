@@ -336,7 +336,7 @@ class ASTCampaignEngine:
         quantity, quantity_status = self._quantity(entry, stop)
         return {
             "asset": self.asset, "side": side, "kind": candidate["kind"], "signal_time": candidate["signal_time"],
-            "signal_close": entry, "entry_price": entry, "stop_loss": stop,
+            "signal_close": entry, "signal_price": entry, "entry_price": entry, "stop_loss": stop,
             "partial_take_profit": entry + risk * (1 if side == "BUY" else -1),
             "take_profit": target, "target_r": round(rr, 2),
             "risk_pct": self.per_position_risk_pct,

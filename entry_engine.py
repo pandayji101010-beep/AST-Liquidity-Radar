@@ -150,6 +150,8 @@ class ASTEntryEngine:
         context_coverage = float(mbie.get("data_coverage_pct") or 0.0)
         if context_score < self.MIN_CONTEXT_SCORE or context_coverage < self.MIN_CONTEXT_COVERAGE:
             return None
+        premium_discount = micro.get("premium_discount")
+        location_ok = premium_discount == ("DISCOUNT" if side == "BUY" else "PREMIUM")
         htf_score = min(20.0, float(mtf.get("agreement_pct") or 0.0) * 0.20)
         checks = {
             "market_context": round(context_score * 0.15, 1),
@@ -165,8 +167,6 @@ class ASTEntryEngine:
         if score < self.MIN_SCORE:
             return None
 
-        premium_discount = micro.get("premium_discount")
-        location_ok = premium_discount == ("DISCOUNT" if side == "BUY" else "PREMIUM")
         targets = self._liquidity_targets(frames, side, float(bar["c"]))
         candidate = {
             "kind": kind,
