@@ -3,8 +3,8 @@
 ## Historical data sources
 
 - BTC uses Binance USD-M Futures public archives and the live Binance Futures stream.
-- GOLD historical/reference candles use Yahoo Finance COMEX continuous gold futures (GC=F). This is a reference series, not the Vantage XAUUSD CFD price.
-- The Vantage MT5 bridge can forward broker bid/ask/last ticks to the dashboard. It is a read-only quote bridge; it does not place or manage trades.
+- GOLD uses Yahoo Finance COMEX continuous gold futures (GC=F) as a fallback reference until the Windows MT5 bridge supplies native Vantage XAUUSD broker candles. Once connected, GOLD structure and levels switch to the direct broker OHLC feed.
+- The Vantage MT5 bridge forwards broker bid/ask/last ticks and native GOLD OHLC candles to the dashboard. It is read-only; it does not place or manage trades.
 
 ## Enable Vantage XAUUSD live quote mapping
 
@@ -45,6 +45,7 @@ MT5_GOLD_SYMBOL=XAUUSD
 MT5_BTC_SYMBOL=BTCUSD
 MT5_PRICE_SIDE=bid
 MT5_POLL_SECONDS=0.5
+MT5_GOLD_CANDLE_SYNC_SECONDS=5
 \`\`\`
 
 Replace \`MT5_GOLD_SYMBOL\` with the exact symbol visible in Vantage Market Watch. Replace \`MT5_BTC_SYMBOL\` if your account exposes BTC under another name; BTC is optional, so a missing BTC symbol does not stop the GOLD bridge.

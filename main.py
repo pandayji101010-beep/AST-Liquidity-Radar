@@ -119,6 +119,8 @@ class AssetState:
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
     data_source: str | None = None
+    broker_candle_feed: bool = False
+    broker_candle_ts: int | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -509,7 +511,17 @@ def calculate_scores(st: AssetState, tf: str) -> dict[str, Any]:
 
 
 def adjusted_price(st: AssetState, exchange_price: float | None) -> float | None:
-    if exchange_price is None or st.basis_ratio is None or st.vantage_ts is None:
+    if exchange_price is None:
+        return None
+    # Direct Vantage GOLD candles are already in the broker's XAUUSD price
+    # scale, so do not apply a synthetic COMEX-to-CFD basis ratio.
+    if st.key == "GOLD" and st.broker_candle_feed:
+        if st.broker_candle_ts is None or now_ms() - st.broker_candle_ts > 90_000:
+            return None
+        if st.mark_ts is None or now_ms() - st.mark_ts > 20_000:
+            return None
+        return exchange_price
+    if st.basis_ratio is None or st.vantage_ts is None:
         return None
     if len(st.basis_ratios) < 3 or st.basis_updated_ts is None:
         return None
@@ -624,6 +636,8 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "asset": key,
         "exchange_symbol": st.symbol,
         "historical_source": st.data_source,
+        "broker_candle_feed": st.broker_candle_feed,
+        "broker_candle_age_seconds": round((now_ms() - st.broker_candle_ts) / 1000, 1) if st.broker_candle_ts else None,
         "exchange_price": st.mark_price,
         "index_price": st.index_price,
         "funding_rate": st.funding_rate,
@@ -657,6 +671,8 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "vantage_match_candidate_price": st.vantage_match_candidate_price,
         "vantage_match_ratio": st.vantage_match_ratio,
         "vantage_match_reason": st.vantage_match_reason,
+        "broker_candle_feed": st.broker_candle_feed,
+        "broker_candle_age_seconds": round((now_ms() - st.broker_candle_ts) / 1000, 1) if st.broker_candle_ts else None,
         "basis_updated_ts": st.basis_updated_ts,
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
@@ -739,6 +755,9 @@ async def gold_market_worker() -> None:
     state = states["GOLD"]
     while True:
         try:
+            if state.broker_candle_feed:
+                await asyncio.sleep(60)
+                continue
             loaded = await load_gold_live(http_client)
             data = loaded["candles"]
             for tf, rows in data.items():
@@ -945,6 +964,23 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
     state.vantage_ticker = ticker[:120]
     state.vantage_tf = "MT5 TICK"
 
+    if key == "GOLD" and state.broker_candle_feed:
+        state.mark_price = price
+        state.index_price = price
+        state.mark_ts = now_ms()
+        state.vantage_match_reason = "Direct Vantage MT5 broker feed"
+        return {
+            "asset": key,
+            "vantage_price": price,
+            "vantage_bid": bid,
+            "vantage_ask": ask,
+            "direct_feed": True,
+            "broker_candle_feed": True,
+            "matched": True,
+            "basis_samples": len(state.basis_ratios),
+            "match_reason": state.vantage_match_reason,
+        }
+
     closest = min(state.exchange_prices, key=lambda x: abs(x[0] - tick_time), default=None)
     match_delta_ms = abs(closest[0] - tick_time) if closest else None
     matched = bool(closest and match_delta_ms is not None and match_delta_ms <= 15_000)
@@ -979,6 +1015,84 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
         "match_delta_ms": match_delta_ms,
         "match_reason": state.vantage_match_reason,
         "matched": matched,
+    }
+
+
+
+def record_vantage_candles(payload: dict[str, Any]) -> dict[str, Any]:
+    """Replace/refresh GOLD analysis candles with native Vantage MT5 XAUUSD OHLC."""
+    asset = str(payload.get("asset", "")).upper()
+    symbol = str(payload.get("symbol", "")).strip()
+    if asset != "GOLD" or "XAU" not in symbol.upper():
+        raise ValueError("Native broker candle endpoint accepts GOLD XAU symbols only")
+
+    frames = payload.get("timeframes")
+    if not isinstance(frames, dict):
+        raise ValueError("timeframes must be an object keyed by supported timeframe")
+
+    state = states["GOLD"]
+    replace_existing = bool(payload.get("replace", False)) or not state.broker_candle_feed
+    if replace_existing:
+        for candles in state.candles.values():
+            candles.clear()
+
+    received_counts: dict[str, int] = {}
+    for timeframe, rows in frames.items():
+        if timeframe not in TIMEFRAMES or not isinstance(rows, list):
+            continue
+
+        merged = {} if replace_existing else {int(item["t"]): item for item in state.candles[timeframe]}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                stamp = int(row.get("t", 0))
+            except (TypeError, ValueError):
+                continue
+            if stamp <= 0:
+                continue
+            if stamp < 10_000_000_000:
+                stamp *= 1000
+
+            o = safe_float(row.get("o"))
+            h = safe_float(row.get("h"))
+            low = safe_float(row.get("l"))
+            close = safe_float(row.get("c"))
+            volume = safe_float(row.get("v"), 0.0)
+            if None in (o, h, low, close) or min(o, h, low, close) <= 0:
+                continue
+            if h < max(o, close, low) or low > min(o, close, h):
+                continue
+            merged[stamp] = {
+                "t": stamp,
+                "o": float(o),
+                "h": float(h),
+                "l": float(low),
+                "c": float(close),
+                "v": max(0.0, float(volume or 0.0)),
+            }
+
+        ordered = [merged[key] for key in sorted(merged)][-HISTORY_BARS:]
+        if ordered:
+            state.candles[timeframe].clear()
+            state.candles[timeframe].extend(ordered)
+            state.latest_analysis[timeframe] = state.analyse(timeframe)
+            received_counts[timeframe] = len(ordered)
+
+    if not received_counts:
+        raise ValueError("No valid Vantage MT5 OHLC candles were received")
+
+    state.broker_candle_feed = True
+    state.broker_candle_ts = now_ms()
+    state.data_source = f"Vantage MT5 {symbol} broker OHLC (direct feed)"
+    state.connection_error = None
+    return {
+        "asset": "GOLD",
+        "symbol": symbol,
+        "broker_candle_feed": True,
+        "timeframes_received": sorted(received_counts),
+        "bars": received_counts,
+        "updated_at": state.broker_candle_ts,
     }
 
 
@@ -1045,6 +1159,25 @@ async def vantage_mt5_bridge(request: Request) -> JSONResponse:
     except Exception as exc:
         log.exception("Vantage MT5 bridge failed")
         raise HTTPException(status_code=400, detail="Invalid MT5 tick payload") from exc
+
+
+
+@app.post("/api/vantage/mt5/candles")
+async def vantage_mt5_candles(request: Request) -> JSONResponse:
+    if not BRIDGE_SECRET or BRIDGE_SECRET == "replace-this-secret":
+        raise HTTPException(status_code=503, detail="Set a unique VANTAGE_BRIDGE_SECRET in the server .env first")
+    supplied_secret = request.headers.get("X-AST-Bridge-Secret", "")
+    if not hmac.compare_digest(supplied_secret, BRIDGE_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid bridge secret")
+    try:
+        payload = await request.json()
+        result = record_vantage_candles(payload)
+        return JSONResponse({"ok": True, **result})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log.exception("Vantage MT5 candle sync failed")
+        raise HTTPException(status_code=400, detail="Invalid MT5 candle payload") from exc
 
 
 @app.get("/api/scanner")
