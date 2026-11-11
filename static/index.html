@@ -97,7 +97,6 @@
   <nav class="mobile-nav" aria-label="Quick navigation">
     <a href="#tradeBoard">Trade levels</a>
     <a href="#reversalSection">Reversal</a>
-    <a href="#momentumSection">Momentum</a>
     <a href="#structureSection">Structure</a>
   </nav>
   <div class="grid">
@@ -113,10 +112,6 @@
     <div class="head"><div><div class="asset">AST MULTI-TIMEFRAME CHOCH / BOS SETUP SCANNER</div><div class="sub">Independent setup detection on every timeframe · BTC/GOLD locks stay separate</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="scanner" class="scanner-grid"><div class="empty">Scanner warming up…</div></div>
   </section>
-  <section class="card full" id="momentumSection">
-    <div class="head"><div><div class="asset">AST MOMENTUM CONTINUATION SCANNER</div><div class="sub">Range breakout without a required liquidity sweep · displacement · retest · rejection · independently evaluated per timeframe</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
-    <div id="momentumScanner" class="scanner-grid"><div class="empty">Momentum engine warming up…</div></div>
-  </section>
   <section class="card full" id="structureSection">
     <div class="head"><div><div class="asset">MAJOR + MINOR STRUCTURE / LIQUIDITY MAP</div><div class="sub">15m+ major structure direction lock · 1m–1D setup scan · BOS / CHOCH · BSL / SSL · origin-zone retest tracking</div></div><div class="tag neutral">1D → 1m</div></div>
     <div id="structure" class="structure-layout"><div class="empty">Collecting confirmed pivots and structure events…</div></div>
@@ -125,7 +120,7 @@
     <div class="head"><div><div class="asset">LIVE EVENT TAPE</div><div class="sub">Confirmed range sweeps, displacement breaks and liquidation prints</div></div><div class="tag neutral">Auto refresh · 2s</div></div>
     <div id="events" class="events"><div class="empty">Waiting for first market event…</div></div>
   </section>
-  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. The separate momentum continuation engine flags strong 20-candle range breaks and waits for a retest/rejection; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trade plans use a retest entry zone, a structural stop, and fixed 1.5R / 2R planning targets. They are educational levels, not guaranteed fills or price destinations; account for spread, slippage and risk.</div>
+  <div class="footer">BTC candles use Binance USD-M Futures history and live streams. GOLD candles use native Vantage MT5 XAUUSD broker OHLC candles when the bridge is connected. Direction changes require multi-timeframe reversal confirmation; it can lag and is not a guarantee. Reaction levels are candidate horizontal prices calculated from Binance candle history; they are not guaranteed reversal points. AST pressure and setup rule scores are rule-completion indices, not probabilities or guaranteed signals. Momentum continuation plans remain available in the Trade Level Board after confirmation; breakout watches are not entry instructions. Binance depth only shows visible orders on that venue; orders can be cancelled. Liquidation stream is a throttled snapshot feed, not a complete market-wide liquidation ledger. BTC Vantage quotes are mapped using a rolling median ratio; GOLD uses direct Vantage MT5 broker candles. Trade plans use a retest entry zone, a structural stop, and fixed 1.5R / 2R planning targets. They are educational levels, not guaranteed fills or price destinations; account for spread, slippage and risk.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -259,39 +254,6 @@ function renderTradeLevels(assetData){
   $('tradeLevels').innerHTML=cards.join('');
 }
 
-function renderMomentumScanner(setups){
-  if(!setups || !setups.length){
-    $('momentumScanner').innerHTML='<div class="empty">Momentum engine is waiting for a strong close beyond the prior 20-candle range. It does not require a liquidity sweep.</div>';
-    return;
-  }
-  const order=['1d','4h','1h','30m','15m','5m','1m'];
-  setups=[...setups].sort((a,b)=>String(a.asset).localeCompare(String(b.asset))||order.indexOf(b.entry_timeframe)-order.indexOf(a.entry_timeframe));
-  $('momentumScanner').innerHTML=setups.map(s=>{
-    const good=s.status==='ENTRY CONFIRMED';
-    const invalid=s.status==='INVALIDATED';
-    const kind=good?'good':invalid?'bad':(['BREAKOUT WATCH','RETEST PENDING','RETEST TESTING'].includes(s.status)?'warn':'neutral');
-    const checks=s.checks||{};
-    const labels={
-      range_breakout:'20-bar range break',
-      momentum_displacement:'Momentum candle',
-      retest_touch:'Boundary retest',
-      retest_rejection:'Rejection close'
-    };
-    const direction=s.side||s.candidate_side||s.direction;
-    const color=direction==='BUY'?'var(--green)':direction==='SELL'?'var(--red)':'var(--text)';
-    const digits=s.asset==='BTC'?1:3;
-    const level=s.breakout_level===null||s.breakout_level===undefined?'—':n(s.breakout_level,digits);
-    return '<div class="scanner-item">'
-      + '<div class="scanner-head"><div><b>'+s.asset+'</b> · '+s.entry_timeframe+'</div>'+tag(s.status,kind)+'</div>'
-      + '<div class="scanner-head" style="margin-top:8px"><div class="scanner-score" style="color:'+color+'">'+(direction||'NEUTRAL')+' <span class="small">· rule score '+(s.score??0)+'/100</span></div>'+tag('NO SWEEP REQUIRED','neutral')+'</div>'
-      + '<div class="tiny">Major '+(s.major_trend||'—')+' · Minor '+(s.minor_trend||'—')+' · Close '+(s.price===null||s.price===undefined?'—':n(s.price,digits))+'</div>'
-      + '<div class="scanner-checks">'+Object.entries(labels).map(([key,label])=>'<span class="check '+(checks[key]?'pass':'fail')+'">'+(checks[key]?'✓':'○')+' '+label+'</span>').join('')+'</div>'
-      + '<div class="tiny" style="margin-top:9px">'+(s.reason||'Waiting for a range breakout.')+'</div>'
-      + (s.breakout_level!==null&&s.breakout_level!==undefined?'<div class="tiny">Broken range boundary: <b>'+level+'</b> · retest band '+n(s.retest_zone_low,digits)+' – '+n(s.retest_zone_high,digits)+'</div>':'')
-      + '</div>';
-  }).join('');
-}
-
 function eventLabel(e){return e?`${e.event} ${e.side} @ ${n(e.level,3)}`:'—'}
 function renderStructure(assetData){
   if(!assetData||!assetData.length){$('structure').innerHTML='<div class="empty">Waiting for historical candle data…</div>';return;}
@@ -325,7 +287,7 @@ async function refresh(){
   try{
     const tf=$('tf').value;
     const [snap,health,scanner]=await Promise.all([fetch(`/api/snapshot?timeframe=${tf}`).then(r=>r.json()),fetch('/api/health').then(r=>r.json()),fetch('/api/scanner').then(r=>r.json())]);
-    renderAsset('btc',snap.assets.BTC); renderAsset('gold',snap.assets.GOLD); renderScanner(scanner.setups); renderMomentumScanner(scanner.momentum_setups); renderTradeLevels(scanner.asset_data); renderStructure(scanner.asset_data);
+    renderAsset('btc',snap.assets.BTC); renderAsset('gold',snap.assets.GOLD); renderScanner(scanner.setups); renderTradeLevels(scanner.asset_data); renderStructure(scanner.asset_data);
     $('sourceSubtitle').textContent=snap.assets.GOLD.broker_candle_feed?'BTC Binance Futures + GOLD Vantage MT5 broker candles':'BTC Binance Futures + GOLD COMEX reference · Vantage price mapping';
     const live=health.market_stream_connected;
     $('connDot').className='dot '+(live?'on':'off');
