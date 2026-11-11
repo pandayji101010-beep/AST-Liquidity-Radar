@@ -165,7 +165,7 @@
     <div id="tradeLevels" class="price-action-grid"><div class="empty">Scanning price-action setups across all timeframes…</div></div>
   </section>
   <section class="card full" id="trapSection">
-    <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">Abhay Patil Black Box Pine v5 · 20/20 pivot S/R · close fake-break · reclaim candle · stop-entry · wick SL · one TP at 1:2 · full available history</div></div><div class="tag neutral">ALL 14 TIMEFRAMES</div></div>
+    <div class="head"><div><div class="asset">AST TRAP TRADING SIGNALS</div><div class="sub">PDF-only Trap rules · 20/20 pivot S/R · close break + reclaim · stop-entry · wick SL · one TP at 1:2 · no BOS / CHOCH / displacement / sweep filters</div></div><div class="tag neutral">ALL 14 TIMEFRAMES</div></div>
     <div id="trapSignals" class="price-action-grid"><div class="empty">Scanning liquidity trap setups across all timeframes…</div></div>
   </section>
   <section class="card full">
@@ -446,7 +446,7 @@ function renderTrapSignals(assetData){
         +' → '+(trap.last_bar_time?time(trap.last_bar_time):'—')+'</div>'
         +'</div>';
 
-      const recent=(trap.recent_traps||[]).slice(-3).reverse();
+      const recent=(trap.recent_traps||[]).slice(-10).reverse();
       const recentHtml=recent.length
         ? '<div class="trap-recent"><b>Recent historical traps</b>'+recent.map(row=>
           '<div class="pa-watch-row"><span>'+row.trap_type+' · '+row.side+' · '+time(row.signal_time)
@@ -457,8 +457,8 @@ function renderTrapSignals(assetData){
       cards.push('<article class="pa-card">'
         +'<div class="pa-top"><span class="pa-time">'+assetName+' · '+tf.toUpperCase()+'</span>'+tag(status,kind)+'</div>'
         +'<div class="pa-signal" style="color:'+color+'">'+title+'</div>'
-        +'<div class="trap-type">'+(signal?.sweep_side||trap.last_trap?.sweep_side||'PIVOT S/R · LOOKBACK '+(trap.lookback||20))+'</div>'
-        +'<div class="pa-trend">Major '+(state.major_trend||'NEUTRAL')+' · Minor '+(state.minor_trend||'NEUTRAL')+' · Pine lookback '+(trap.lookback||20)+' · TP 1:'+(trap.rr_ratio||2)+'</div>'
+        +'<div class="trap-type">'+(signal?.break_side||trap.last_trap?.break_side||'PIVOT S/R · LOOKBACK '+(trap.lookback||20))+'</div>'
+        +'<div class="pa-trend">PDF rules: 20-left/20-right pivot S/R · close break + reclaim · stop-entry · wick SL · 1:2 target</div>'
         +body+historical+recentHtml
         +'</article>');
     }
