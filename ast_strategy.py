@@ -467,6 +467,80 @@ class ASTStructureStrategy:
             "reason": reason,
         }
     @staticmethod
+    def _trap_setup_from_reversal_setup(
+        timeframe: str,
+        setup: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Translate a confirmed sweep -> displacement -> structure break into a trap plan."""
+        checks = setup.get("checks") or {}
+        base = {
+            "entry_timeframe": timeframe,
+            "status": "WAITING",
+            "trap_type": None,
+            "side": None,
+            "candidate_side": None,
+            "sweep_type": None,
+            "sweep_level": None,
+            "price": setup.get("price"),
+            "major_trend": setup.get("major_trend", "NEUTRAL"),
+            "minor_trend": setup.get("minor_trend", "NEUTRAL"),
+            "checks": {
+                "liquidity_sweep": bool(checks.get("liquidity_sweep")),
+                "directional_displacement": bool(checks.get("displacement")),
+                "structure_confirmation": bool(checks.get("structure_break")),
+            },
+            "trade_plan": None,
+            "reason": "Waiting for price to sweep a prior high or low and reclaim the range.",
+        }
+
+        side = setup.get("side") or setup.get("candidate_side")
+        if not checks.get("liquidity_sweep") or side not in ("BUY", "SELL"):
+            return base
+
+        # A low/SSL sweep that closes back above its level traps sellers and
+        # becomes a BUY (bear trap). A high/BSL sweep traps buyers and becomes a SELL.
+        trap_type = "BEAR TRAP" if side == "BUY" else "BULL TRAP"
+        sweep_type = "SSL / SELL-SIDE LIQUIDITY" if side == "BUY" else "BSL / BUY-SIDE LIQUIDITY"
+        trade_plan = setup.get("trade_plan")
+        source_status = setup.get("status")
+
+        if source_status == "ENTRY CONFIRMED" and trade_plan:
+            status = "TRAP CONFIRMED"
+            reason = (
+                "Liquidity was swept and reclaimed, followed by directional displacement "
+                "and a matching BOS/CHOCH on this timeframe's closed candles."
+            )
+        elif source_status == "SETUP FORMING":
+            status = "TRAP FORMING"
+            reason = "Liquidity was swept and reclaimed; directional displacement is present. Waiting for matching BOS/CHOCH."
+        elif source_status == "LIQUIDITY SWEPT":
+            status = "SWEEP DETECTED"
+            reason = "A prior liquidity level was swept and reclaimed. Waiting for displacement and structure confirmation."
+        elif source_status == "ENTRY CONFIRMED":
+            status = "RISK PLAN UNAVAILABLE"
+            reason = "Trap structure confirmed, but a valid structural stop could not be calculated. No entry levels are issued."
+        else:
+            status = "TRAP FORMING"
+            reason = setup.get("reason") or "Trap sequence is still being evaluated."
+
+        return {
+            **base,
+            "status": status,
+            "trap_type": trap_type,
+            "side": side if status == "TRAP CONFIRMED" else None,
+            "candidate_side": side if status != "TRAP CONFIRMED" else None,
+            "sweep_type": sweep_type,
+            "sweep_level": setup.get("sweep_level"),
+            "checks": {
+                "liquidity_sweep": bool(checks.get("liquidity_sweep")),
+                "directional_displacement": bool(checks.get("displacement")),
+                "structure_confirmation": bool(checks.get("structure_break")),
+            },
+            "trade_plan": trade_plan if status == "TRAP CONFIRMED" else None,
+            "reason": reason,
+        }
+
+    @staticmethod
     def _momentum_continuation_for_timeframe(
         timeframe: str,
         bars: list[dict[str, Any]],
@@ -677,6 +751,7 @@ class ASTStructureStrategy:
                     "major_event": None, "minor_event": None,
                     "setup": {"status": "WAITING", "side": None},
                     "momentum_setup": {"status": "WAITING", "side": None, "candidate_side": None, "direction": None, "score": 0, "trade_plan": None, "reason": "Need at least 30 valid candles."},
+                    "trap_setup": {"status": "WAITING", "trap_type": None, "side": None, "candidate_side": None, "trade_plan": None, "checks": {"liquidity_sweep": False, "directional_displacement": False, "structure_confirmation": False}, "reason": "Need at least 30 valid candles."},
                     "sweeps": [],
                 }
                 internals[tf] = None
@@ -704,6 +779,7 @@ class ASTStructureStrategy:
                 tf, bars, sweeps, displacement, events, zones,
                 major["trend"], minor["trend"],
             )
+            trap_setup = self._trap_setup_from_reversal_setup(tf, setup)
             momentum_setup = self._momentum_continuation_for_timeframe(
                 tf, bars, atr, major["trend"], minor["trend"],
             )
@@ -730,6 +806,17 @@ class ASTStructureStrategy:
                     "breakout_level": momentum_setup["breakout_level"],
                     "trade_plan": momentum_setup.get("trade_plan"),
                 },
+                "trap_setup": {
+                    "status": trap_setup["status"],
+                    "trap_type": trap_setup["trap_type"],
+                    "side": trap_setup["side"],
+                    "candidate_side": trap_setup["candidate_side"],
+                    "sweep_type": trap_setup["sweep_type"],
+                    "sweep_level": trap_setup["sweep_level"],
+                    "checks": trap_setup["checks"],
+                    "trade_plan": trap_setup.get("trade_plan"),
+                    "reason": trap_setup["reason"],
+                },
                 "sweeps": [
                     {"type": item["type"], "side": item["side"], "level": item["level"], "time": item["time"]}
                     for item in sweeps[-5:]
@@ -738,21 +825,24 @@ class ASTStructureStrategy:
             internals[tf] = {
                 "bars": bars, "atr": atr, "displacement": displacement,
                 "sweeps": sweeps, "events": events, "major": major, "minor": minor,
-                "zones": zones, "setup": setup, "momentum_setup": momentum_setup,
+                "zones": zones, "setup": setup, "momentum_setup": momentum_setup, "trap_setup": trap_setup,
             }
 
         # Each timeframe keeps the setup calculated from its own candles.
         # No asset-wide direction lock or cross-timeframe voting is applied.
         setups = []
         momentum_setups = []
+        trap_setups = []
         for tf in self.TIMEFRAMES:
             data = internals[tf]
             if data is None:
                 continue
             setup = data["setup"]
             momentum_setup = data["momentum_setup"]
+            trap_setup = data["trap_setup"]
             setups.append(setup)
             momentum_setups.append(momentum_setup)
+            trap_setups.append(trap_setup)
             timeframe_results[tf]["setup"] = {
                 "status": setup["status"],
                 "side": setup["side"] or setup["candidate_side"],
@@ -768,6 +858,17 @@ class ASTStructureStrategy:
                 "breakout_level": momentum_setup["breakout_level"],
                 "trade_plan": momentum_setup.get("trade_plan"),
             }
+            timeframe_results[tf]["trap_setup"] = {
+                "status": trap_setup["status"],
+                "trap_type": trap_setup["trap_type"],
+                "side": trap_setup["side"],
+                "candidate_side": trap_setup["candidate_side"],
+                "sweep_type": trap_setup["sweep_type"],
+                "sweep_level": trap_setup["sweep_level"],
+                "checks": trap_setup["checks"],
+                "trade_plan": trap_setup.get("trade_plan"),
+                "reason": trap_setup["reason"],
+            }
         result = {
             "timeframes": timeframe_results,
             "zones": sorted(all_zones, key=lambda item: item.get("created_time") or 0, reverse=True)[:20],
@@ -775,6 +876,7 @@ class ASTStructureStrategy:
             "events": sorted(all_events, key=lambda item: (item.get("time") or 0, item["timeframe"]), reverse=True)[:60],
             "setups": setups,
             "momentum_setups": momentum_setups,
+            "trap_setups": trap_setups,
         }
         self._cache_signature = signature
         self._cache_result = copy.deepcopy(result)
