@@ -1255,9 +1255,9 @@ async def scanner() -> dict[str, Any]:
             )
             timeframes = {
                 timeframe: {
-                    "ready": bool(setup.get("ready")),
-                    "bars": int(setup.get("bars", setup.get("bars_scanned", 0)) or 0),
-                    "message": setup.get("message"),
+                    "ready": setup.get("status") != "WARMING UP",
+                    "bars": int(setup.get("bars_scanned", 0) or 0),
+                    "message": setup.get("reason"),
                     "trap_setup": setup,
                 }
                 for timeframe, setup in trap_result.get("timeframes", {}).items()
