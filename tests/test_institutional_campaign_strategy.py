@@ -70,6 +70,8 @@ class InstitutionalCampaignStrategyTests(unittest.TestCase):
         self.assertIn("execution_1m", result)
         self.assertTrue(result["replay"]["lookahead_safe"])
         self.assertEqual(result["replay"]["bars_processed"], len(self.minute_bars()))
+        self.assertIn("profit_factor", result["performance"])
+        self.assertIn("max_drawdown_pct_of_equity", result["performance"])
 
     def test_future_incomplete_daily_bar_is_not_used_for_current_intraday_context(self):
         engine = ASTInstitutionalCampaignStrategy()
@@ -82,6 +84,19 @@ class InstitutionalCampaignStrategyTests(unittest.TestCase):
         result = engine.snapshot({"1m": minutes, "1d": daily}, "BTC")
         self.assertFalse(result["higher_timeframes"]["1d"]["ready"])
         self.assertTrue(result["replay"]["lookahead_safe"])
+
+    def test_flat_1m_range_is_classified_as_choppy(self):
+        start = int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        bars = []
+        for i in range(40):
+            bars.append({
+                "t": start + i * 60_000,
+                "o": 100.0, "h": 100.2, "l": 99.8, "c": 100.0, "v": 100,
+            })
+        frame = ASTInstitutionalCampaignStrategy._frame_snapshot(bars, "1m")
+        self.assertTrue(frame["choppy"])
+        self.assertAlmostEqual(frame["previous_period_high"], 100.2)
+        self.assertAlmostEqual(frame["previous_period_low"], 99.8)
 
     def test_smt_is_marked_unavailable_not_invented(self):
         score = ASTInstitutionalCampaignStrategy._setup_score(

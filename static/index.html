@@ -629,12 +629,16 @@ function renderCampaigns(payload){
       +'% · Open positions '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10)
       +' · HTF agreement '+n(alignment.agreement_pct||0,1)+'%';
     const replay=a.replay||{};
+    const performance=a.performance||{};
+    const winText=performance.win_rate_pct===null||performance.win_rate_pct===undefined?'—':n(performance.win_rate_pct,1)+'%';
+    const pfText=performance.profit_factor===null||performance.profit_factor===undefined?'—':n(performance.profit_factor,2);
     return '<section class="campaign-asset">'
       +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b>'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
       +'<div class="campaign-meta">'+riskLine+'</div>'
       +'<div class="campaign-tf-row">'+tfHtml+'</div>'
       +'<div class="campaign-foot">'+sourceNote+' Replay: '+n(replay.bars_processed||0,0)+' completed 1m candles · '+(replay.lookahead_safe?'point-in-time replay':'replay status unavailable')+'. Signals are simulated plans, not broker orders.</div>'
+      +'<div class="campaign-foot">Replay metrics: '+n(performance.closed_positions||0,0)+' closed positions · Win rate '+winText+' · Profit factor '+pfText+' · Net '+n(performance.net_r||0,2)+'R · Max DD '+n(performance.max_drawdown_pct_of_equity||0,2)+'% · Fees/slippage excluded.</div>'
       +(campaign.can_add_position?'':campaign.status==='ACTIVE'?'<div class="campaign-foot">Add-on entries are currently blocked by campaign limits or position availability.</div>':'')
       +'</section>';
   }).join('');

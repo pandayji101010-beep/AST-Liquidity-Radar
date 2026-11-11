@@ -168,6 +168,8 @@ class ASTInstitutionalCampaignStrategy:
         swing_low = None
         pivot_high_time = None
         pivot_low_time = None
+        confirmed_highs: list[float] = []
+        confirmed_lows: list[float] = []
         pivot_start = max(2, len(bars) - 100)
         for i in range(pivot_start, len(bars) - 2):
             left_h = highs[i - 2:i]
@@ -177,8 +179,24 @@ class ASTInstitutionalCampaignStrategy:
             if len(left_h) == 2 and len(right_h) == 2:
                 if highs[i] > max(left_h) and highs[i] >= max(right_h):
                     swing_high, pivot_high_time = highs[i], int(bars[i]["t"])
+                    confirmed_highs.append(highs[i])
                 if lows[i] < min(left_l) and lows[i] <= min(right_l):
                     swing_low, pivot_low_time = lows[i], int(bars[i]["t"])
+                    confirmed_lows.append(lows[i])
+
+        equal_tolerance = max(atr * 0.20, close * 0.00015)
+        equal_high = (
+            (confirmed_highs[-1] + confirmed_highs[-2]) / 2.0
+            if len(confirmed_highs) >= 2 and abs(confirmed_highs[-1] - confirmed_highs[-2]) <= equal_tolerance
+            else None
+        )
+        equal_low = (
+            (confirmed_lows[-1] + confirmed_lows[-2]) / 2.0
+            if len(confirmed_lows) >= 2 and abs(confirmed_lows[-1] - confirmed_lows[-2]) <= equal_tolerance
+            else None
+        )
+        previous_period_high = float(last["h"])
+        previous_period_low = float(last["l"])
 
         upper_sweep = bool(prior_high is not None and float(last["h"]) > prior_high and close < prior_high)
         lower_sweep = bool(prior_low is not None and float(last["l"]) < prior_low and close > prior_low)
@@ -195,6 +213,19 @@ class ASTInstitutionalCampaignStrategy:
             bos_side = "SELL"
 
         displacement_side = "BUY" if bull_displacement else "SELL" if bear_displacement else None
+        previous_closes = closes[:-1]
+        previous_ema20 = ASTInstitutionalCampaignStrategy._ema(previous_closes[-min(len(previous_closes), 240):], 20)
+        previous_ema50 = ASTInstitutionalCampaignStrategy._ema(previous_closes[-min(len(previous_closes), 480):], 50)
+        previous_side = (
+            "BUY" if previous_ema20 is not None and previous_ema50 is not None
+            and float(previous["c"]) > previous_ema20 > previous_ema50 else
+            "SELL" if previous_ema20 is not None and previous_ema50 is not None
+            and float(previous["c"]) < previous_ema20 < previous_ema50 else None
+        )
+        structure_event = (
+            "CHOCH" if bos_side and previous_side and previous_side != bos_side
+            else "BOS" if bos_side else None
+        )
         if ema20 is not None and ema50 is not None and close > ema20 and ema20 > ema50:
             side = "BUY"
         elif ema20 is not None and ema50 is not None and close < ema20 and ema20 < ema50:
@@ -246,6 +277,12 @@ class ASTInstitutionalCampaignStrategy:
         range_low = min(float(x["l"]) for x in range_bars)
         midpoint = (range_high + range_low) / 2.0
         premium_discount = "DISCOUNT" if close <= midpoint else "PREMIUM"
+        sample_closes = closes[-21:]
+        travelled = sum(abs(sample_closes[i] - sample_closes[i - 1]) for i in range(1, len(sample_closes)))
+        net_move = abs(sample_closes[-1] - sample_closes[0]) if len(sample_closes) > 1 else 0.0
+        efficiency_ratio = net_move / travelled if travelled > 0 else 0.0
+        range_width_atr = (range_high - range_low) / atr if atr > 0 else None
+        choppy = bool(efficiency_ratio < 0.12 and (range_width_atr is None or range_width_atr < 5.0))
         volumes = [float(x.get("v") or 0.0) for x in bars[-21:-1]]
         avg_volume = sum(volumes) / len(volumes) if volumes else 0.0
         rel_volume = float(last.get("v") or 0.0) / avg_volume if avg_volume > 0 else None
@@ -260,13 +297,17 @@ class ASTInstitutionalCampaignStrategy:
             "close": close, "candle_time": int(last["t"]),
             "ema20": ema20, "ema50": ema50, "atr": atr, "atr_pct": atr_pct,
             "prior_high": prior_high, "prior_low": prior_low,
+            "previous_period_high": previous_period_high, "previous_period_low": previous_period_low,
             "swing_high": swing_high, "swing_low": swing_low,
+            "equal_high": equal_high, "equal_low": equal_low,
             "pivot_high_time": pivot_high_time, "pivot_low_time": pivot_low_time,
             "upper_sweep": upper_sweep, "lower_sweep": lower_sweep,
-            "bos_side": bos_side, "displacement_side": displacement_side,
+            "bos_side": bos_side, "structure_event": structure_event,
+            "displacement_side": displacement_side,
             "bull_displacement": bull_displacement, "bear_displacement": bear_displacement,
             "fvg": fvg, "order_block": order_block,
             "premium_discount": premium_discount, "range_high": range_high, "range_low": range_low,
+            "efficiency_ratio": efficiency_ratio, "range_width_atr": range_width_atr, "choppy": choppy,
             "relative_volume": rel_volume, "volume_confirmed": rel_volume is not None and rel_volume >= 1.20,
             "session_ok": session_ok, "volatility_ok": volatility_ok,
             "reason": "Closed-candle structure, trend, liquidity and imbalance snapshot.",
@@ -340,7 +381,10 @@ class ASTInstitutionalCampaignStrategy:
             data = frames.get(timeframe, {})
             if not data.get("ready"):
                 continue
-            for key in ("prior_high", "prior_low", "swing_high", "swing_low", "range_high", "range_low"):
+            for key in (
+                "prior_high", "prior_low", "previous_period_high", "previous_period_low",
+                "equal_high", "equal_low", "swing_high", "swing_low", "range_high", "range_low",
+            ):
                 value = data.get(key)
                 if isinstance(value, (int, float)) and math.isfinite(value):
                     candidates.add(float(value))
@@ -408,11 +452,22 @@ class ASTInstitutionalCampaignStrategy:
         setup: dict[str, Any] | None = None
         last_signal: dict[str, Any] | None = None
         recent_closed: list[dict[str, Any]] = []
+        closed_history: list[dict[str, Any]] = []
+        campaign_entry_sizes: list[int] = []
+        campaign_count = 0
         latest_alignment: dict[str, Any] = {"status": "WAITING", "side": None, "agreement_pct": 0}
         daily_pnl: dict[str, float] = {}
         latest_micro: dict[str, Any] = {}
         processed = 0
         previous_day = None
+
+        def record_closed(position: dict[str, Any]) -> None:
+            item = {k: position.get(k) for k in (
+                "id", "kind", "side", "entry_price", "stop_loss", "take_profit",
+                "status", "result_r", "entry_time", "exit_time", "risk_pct",
+            )}
+            recent_closed.append(item)
+            closed_history.append(item)
 
         for index, bar in enumerate(one):
             asof = int(bar["t"]) + FRAME_MS["1m"]
@@ -483,7 +538,8 @@ class ASTInstitutionalCampaignStrategy:
                         result_r = r_now * position["remaining_fraction"] + position["realized_r"]
                         position.update({"status": "CAMPAIGN INVALIDATED", "exit_price": float(current["c"]), "exit_time": asof, "result_r": round(result_r, 3)})
                         daily_pnl[day_key] = daily_pnl.get(day_key, 0.0) + position["risk_pct"] * result_r
-                        recent_closed.append({k: position.get(k) for k in ("id", "kind", "side", "entry_price", "stop_loss", "take_profit", "status", "result_r", "exit_time")})
+                        record_closed(position)
+                    campaign_entry_sizes.append(int(campaign.get("entries_count", 0)))
                     campaign["positions"] = []
                     campaign = None
                     pending = None
@@ -537,9 +593,10 @@ class ASTInstitutionalCampaignStrategy:
                         kept.append(position)
                     else:
                         daily_pnl[day_key] = daily_pnl.get(day_key, 0.0) + position["risk_pct"] * position.get("result_r", 0.0)
-                        recent_closed.append({k: position.get(k) for k in ("id", "kind", "side", "entry_price", "stop_loss", "take_profit", "status", "result_r", "exit_time")})
+                        record_closed(position)
                 campaign["positions"] = kept
                 if not kept:
+                    campaign_entry_sizes.append(int(campaign.get("entries_count", 0)))
                     campaign = None
 
             # Fill a signal only at the next 1m candle open, after the signal candle has closed.
@@ -562,6 +619,7 @@ class ASTInstitutionalCampaignStrategy:
                     )
                     if risk > 0 and rr >= self.MIN_TARGET_R and can_add and daily_pnl.get(day_key, 0.0) > -self.DAILY_MAX_LOSS_PCT:
                         if campaign is None:
+                            campaign_count += 1
                             campaign = {
                                 "id": f"{asset}-{asof}", "side": side, "started_at": asof,
                                 "positions": [], "last_entry_price": fill_price,
@@ -596,7 +654,7 @@ class ASTInstitutionalCampaignStrategy:
 
             # A new 1m sequence begins only after an aligned sweep or clear rejection.
             bias_side = latest_alignment.get("side")
-            if sweep_side and bias_side == sweep_side:
+            if sweep_side and bias_side == sweep_side and not micro_frame.get("choppy"):
                 setup = {
                     "side": sweep_side, "sweep_time": asof,
                     "sweep_price": float(current["l"] if sweep_side == "BUY" else current["h"]),
@@ -605,7 +663,7 @@ class ASTInstitutionalCampaignStrategy:
                 }
             if setup is not None:
                 age = index - int(setup["start_index"])
-                if age > 18 or setup.get("side") != bias_side:
+                if age > 18 or setup.get("side") != bias_side or micro_frame.get("choppy"):
                     setup = None
                 else:
                     side = setup["side"]
@@ -707,6 +765,44 @@ class ASTInstitutionalCampaignStrategy:
         alignment = self._alignment(higher)
         positions = campaign["positions"] if campaign else []
         campaign_risk = round(sum(float(x["risk_pct"]) for x in positions if x["status"] == "OPEN"), 3)
+
+        closed_count = len(closed_history)
+        win_count = sum(1 for x in closed_history if float(x.get("result_r") or 0.0) > 0)
+        loss_count = closed_count - win_count
+        gross_win_r = sum(max(float(x.get("result_r") or 0.0), 0.0) for x in closed_history)
+        gross_loss_r = sum(abs(min(float(x.get("result_r") or 0.0), 0.0)) for x in closed_history)
+        cumulative_pct = peak_pct = max_drawdown_pct = 0.0
+        consecutive_losses = max_consecutive_losses = 0
+        holding_minutes: list[float] = []
+        for item in closed_history:
+            result_r = float(item.get("result_r") or 0.0)
+            cumulative_pct += float(item.get("risk_pct") or 0.0) * result_r
+            peak_pct = max(peak_pct, cumulative_pct)
+            max_drawdown_pct = max(max_drawdown_pct, peak_pct - cumulative_pct)
+            if result_r > 0:
+                consecutive_losses = 0
+            else:
+                consecutive_losses += 1
+                max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
+            if item.get("entry_time") and item.get("exit_time"):
+                holding_minutes.append(max(0.0, (int(item["exit_time"]) - int(item["entry_time"])) / 60_000.0))
+        performance = {
+            "closed_positions": closed_count,
+            "wins": win_count,
+            "losses": loss_count,
+            "win_rate_pct": round(win_count / closed_count * 100.0, 2) if closed_count else None,
+            "profit_factor": round(gross_win_r / gross_loss_r, 3) if gross_loss_r > 0 else None,
+            "gross_win_r": round(gross_win_r, 3),
+            "gross_loss_r": round(gross_loss_r, 3),
+            "net_r": round(sum(float(x.get("result_r") or 0.0) for x in closed_history), 3),
+            "max_drawdown_pct_of_equity": round(max_drawdown_pct, 3),
+            "max_consecutive_losses": max_consecutive_losses,
+            "average_holding_minutes": round(sum(holding_minutes) / len(holding_minutes), 1) if holding_minutes else None,
+            "campaigns_started": campaign_count,
+            "average_entries_per_closed_campaign": round(sum(campaign_entry_sizes) / len(campaign_entry_sizes), 2) if campaign_entry_sizes else None,
+            "sample_scope": "Sequential replay of the loaded closed 1m candles; capped by AST_CAMPAIGN_REPLAY_BARS.",
+            "fees_slippage_included": False,
+        }
         can_add = bool(
             campaign and len(positions) < self.MAX_POSITIONS
             and campaign_risk + self.PER_POSITION_RISK_PCT <= self.MAX_CAMPAIGN_RISK_PCT
@@ -732,6 +828,9 @@ class ASTInstitutionalCampaignStrategy:
         elif alignment["status"] != "CONFIRMED":
             status = "WAITING FOR HTF CONFIRMATION"
             reason = alignment["reason"]
+        elif latest_micro.get("choppy"):
+            status = "NO TRADE · CHOPPY MARKET"
+            reason = "The current 1m market is compressed/choppy; wait for directional efficiency and a fresh confirmed sequence."
         else:
             status = "WAITING FOR 1M PULLBACK"
             reason = "HTF bias confirmed; waiting for a fresh 1m sweep/rejection, MSS/BOS, displacement and FVG/OB retest."
@@ -759,6 +858,7 @@ class ASTInstitutionalCampaignStrategy:
                 "daily_loss_limit_pct": self.DAILY_MAX_LOSS_PCT,
             },
             "recent_closed": recent_closed[-10:],
+            "performance": performance,
             "replay": {
                 "bars_processed": processed,
                 "bars_available": len(one),
@@ -769,8 +869,9 @@ class ASTInstitutionalCampaignStrategy:
             },
             "data_notes": [
                 "1M and 1w candles are calendar aggregates of completed daily candles and are not exposed before their period closes.",
-                "SMT divergence is not scored because no valid correlated-symbol feed is configured; unavailable order-flow data is not fabricated.",
+                "SMT divergence, order-flow absorption, volume delta, volume profile and news risk are not scored unless a verified source is connected; they are not fabricated.",
                 "Risk percentages are planning allocations; live quantity requires account equity, contract size and broker-specific tick values.",
                 "Signals are analytical plans and simulated replay entries, not broker orders.",
+                "Backtest performance excludes commissions and slippage; use separate out-of-sample and forward tests before live use.",
             ],
         }
