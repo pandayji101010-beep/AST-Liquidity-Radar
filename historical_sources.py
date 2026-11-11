@@ -114,6 +114,7 @@ async def _load_interval_archive(
     timeframe: str,
     completed_months: int,
     limit: int,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> list[dict[str, Any]]:
     """Load a longer native-interval archive plus this month's published daily files."""
     now = datetime.now(timezone.utc)
@@ -130,7 +131,7 @@ async def _load_interval_archive(
         urls.append(f"{BINANCE_ARCHIVE}/daily/klines/{symbol}/{timeframe}/{name}")
         day += timedelta(days=1)
 
-    semaphore = asyncio.Semaphore(6)
+    semaphore = semaphore or asyncio.Semaphore(6)
     pages = await asyncio.gather(*(_download_archive(client, url, semaphore) for url in urls))
     by_time: dict[int, dict[str, Any]] = {}
     for page in pages:
@@ -144,7 +145,7 @@ async def load_btc_um_history(
     symbol: str = "BTCUSDT",
     limit: int = 25_000,
 ) -> dict[str, Any]:
-    """Load two completed months plus current-month daily USD-M Futures 1m archives."""
+    """Load deep native Binance USD-M OHLC archives independently for every timeframe."""
     now = datetime.now(timezone.utc)
     urls = []
     for month in _previous_months(now, 2):
@@ -160,8 +161,10 @@ async def load_btc_um_history(
         urls.append(f"{BINANCE_ARCHIVE}/daily/klines/{symbol}/1m/{name}")
         day += timedelta(days=1)
 
-    semaphore = asyncio.Semaphore(4)
-    pages = await asyncio.gather(*(_download_archive(client, url, semaphore) for url in urls))
+    one_minute_semaphore = asyncio.Semaphore(4)
+    pages = await asyncio.gather(
+        *(_download_archive(client, url, one_minute_semaphore) for url in urls)
+    )
     by_time: dict[int, dict[str, Any]] = {}
     for page in pages:
         for candle in page:
@@ -170,26 +173,45 @@ async def load_btc_um_history(
     if len(one_minute) < 30:
         raise RuntimeError(f"Binance public archive returned only {len(one_minute)} BTC 1m bars")
 
-    # Use native higher-timeframe archives for deeper swing context. The
-    # shorter intervals are still aggregated from the recent 1m sequence.
-    four_hour, daily = await asyncio.gather(
-        _load_interval_archive(client, symbol, "4h", 12, limit),
-        _load_interval_archive(client, symbol, "1d", 36, limit),
+    # Request enough native monthly archives to fill the 25,000-bar replay cap
+    # wherever BTC USD-M archive history exists. This prevents 1h/4h/1d history
+    # from being artificially limited to the recent 1m download window.
+    archive_months = {
+        "5m": 4,
+        "15m": 10,
+        "30m": 20,
+        "1h": 36,
+        "4h": 96,
+        "1d": 96,
+    }
+    archive_semaphore = asyncio.Semaphore(6)
+    interval_names = list(archive_months)
+    interval_pages = await asyncio.gather(
+        *(
+            _load_interval_archive(
+                client, symbol, timeframe, archive_months[timeframe], limit,
+                semaphore=archive_semaphore,
+            )
+            for timeframe in interval_names
+        )
     )
+    native_history = dict(zip(interval_names, interval_pages))
+
     data = {"1m": one_minute[-limit:]}
-    for tf in ("5m", "15m", "30m", "1h"):
-        data[tf] = resample_from_1m(one_minute, tf, limit)
-    data["4h"] = four_hour or resample_from_1m(one_minute, "4h", limit)
-    data["1d"] = daily or resample_from_1m(one_minute, "1d", limit)
+    for timeframe in interval_names:
+        # Native archives are preferred. Resampling is only a fallback if the
+        # provider has no native interval archive available.
+        data[timeframe] = native_history.get(timeframe) or resample_from_1m(
+            one_minute, timeframe, limit
+        )
 
     counts = {tf: len(rows) for tf, rows in data.items()}
     log.info("BTC historical archive loaded: %s", counts)
     return {
         "candles": data,
-        "source": "Binance public USD-M Futures archives (BTCUSDT; 1m lower-TF aggregation, native 4h/1d archives)",
+        "source": "Binance USD-M BTCUSDT native timeframe archives (1m fallback resampling)",
         "bars": counts,
     }
-
 
 def _normalise_yahoo_chart(payload: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
     chart = payload.get("chart") or {}
