@@ -503,7 +503,7 @@ class ASTStructureStrategy:
                 checks["retest_touch"] = True
                 if rejected:
                     checks["retest_rejection"] = True
-                break
+                    break
 
         score = round(sum(checks.values()) / len(checks) * 100)
         common = {
