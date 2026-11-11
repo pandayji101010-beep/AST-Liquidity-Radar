@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
 from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
-from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy
+from ast_campaign_orchestrator import ASTFourEngineOrchestrator
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -119,7 +119,7 @@ class AssetState:
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
-    campaign_engine: ASTInstitutionalCampaignStrategy = field(default_factory=ASTInstitutionalCampaignStrategy)
+    campaign_engine: ASTFourEngineOrchestrator = field(default_factory=ASTFourEngineOrchestrator)
     data_source: str | None = None
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
@@ -1268,7 +1268,13 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST Multi-Timeframe Pyramiding Campaign: Monthly/weekly/daily/4h/1h/30m/15m/5m context, confirmed 1m sweep/rejection + MSS/BOS + displacement + FVG/OB retest, main and add-on campaign entries, risk controls and point-in-time replay.",
+        "strategy": "AST Four-Engine Campaign Architecture: MBIE market intelligence -> Multi-Timeframe context -> 1m Main/Add-on Entry Engine -> Campaign risk and position management.",
+        "engine_architecture": {
+            "MBIE": "Market regime, structure, liquidity, auction profile proxy, order-flow availability, zones, momentum, volatility, scenarios and data coverage. No entry signal generation.",
+            "Multi-Timeframe Engine": "Combines completed Monthly/Weekly/Daily/4H/1H/30M/15M/5M context without overwriting individual timeframe readings.",
+            "Entry Engine": "Generates 1m MAIN and ADD-ON candidates only; cannot set quantity, stop loss or take profit.",
+            "Campaign Engine": "Owns quantity estimation, SL, TP, total campaign risk, add-on protection, partial exits and campaign invalidation.",
+        },
         "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
         "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
@@ -1283,6 +1289,7 @@ async def config() -> dict[str, Any]:
             "1W and 1M context are aggregated from completed daily candles; no incomplete calendar period is used for confirmation.",
             "1m plans are emitted after a completed signal candle and simulated at the next 1m open; the backend does not place broker orders.",
             "Campaign defaults: 0.20% risk allocation per position, 1.50% maximum campaign risk, 10 concurrent positions and 2.00% daily loss pause; configure with AST_CAMPAIGN_* environment variables.",
-            "Trade size is not calculated unless account equity, contract size and broker tick-value settings are configured.",
+            "Quantity is only estimated when AST_CAMPAIGN_ACCOUNT_EQUITY and the asset-specific AST_CAMPAIGN_BTC_VALUE_PER_PRICE_UNIT or AST_CAMPAIGN_GOLD_VALUE_PER_PRICE_UNIT are configured; otherwise quantity is explicitly unavailable.",
+            "Add-on entries require same-side campaign, favorable extension and all existing open stops protected at breakeven or better.",
         ],
     }

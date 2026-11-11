@@ -463,6 +463,23 @@ body{
 .campaign-tf.sell b{color:var(--red)}
 .campaign-tf.neutral b{color:var(--amber)}
 .campaign-foot{font-size:10px;color:var(--muted);line-height:1.55;margin-top:9px}
+.mbie-card{margin-top:12px;padding:12px;border:1px solid #31465b;border-radius:12px;background:#0b1724}
+.mbie-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.mbie-title{font-size:12px;font-weight:900;letter-spacing:.06em;color:#ecf3f9}
+.mbie-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px}
+.mbie-item{background:#101d2b;border:1px solid #26384b;border-radius:8px;padding:8px;min-width:0}
+.mbie-item .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.mbie-item .v{font-size:12px;font-weight:800;margin-top:4px;overflow-wrap:anywhere;color:#eaf1f7}
+.mbie-subhead{font-size:10px;font-weight:850;color:#cbd9e6;margin:11px 0 6px}
+.mbie-scenarios{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.mbie-scenario{background:#101d2b;border:1px solid #26384b;border-radius:8px;padding:8px;min-width:0}
+.mbie-scenario b{font-size:10px}
+.mbie-scenario p{font-size:9px;line-height:1.5;color:#adbdcc;margin:5px 0 0}
+.engine-contract{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.engine-contract span{font-size:9px;border:1px solid #2b4055;border-radius:7px;padding:5px 7px;color:#becbd8;background:#0b1724}
+.engine-contract b{color:#eaf2f8}
+@media(max-width:800px){.mbie-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mbie-scenarios{grid-template-columns:1fr}}
+@media(max-width:420px){.mbie-grid{gap:6px}.mbie-item{padding:7px}.mbie-item .v{font-size:11px}}
 @media(max-width:700px){
  .campaign-asset{padding:11px}
  .campaign-position-grid{grid-template-columns:1fr;gap:7px}
@@ -476,13 +493,13 @@ body{
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="brand"><div class="mark">AST</div><div><h1>AST MULTI-TIMEFRAME CAMPAIGN</h1><div class="sub" id="sourceSubtitle">Pyramiding campaign · BTC + GOLD · 1m execution</div></div></div>
+    <div class="brand"><div class="mark">AST</div><div><h1>AST FOUR-ENGINE CAMPAIGN</h1><div class="sub" id="sourceSubtitle">MBIE → Multi-Timeframe → Entry → Campaign · BTC + GOLD</div></div></div>
     <div class="controls"><div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting campaign engine…</span></div></div>
   </div>
 
   <section class="card full" id="campaignSection">
     <div class="head">
-      <div><div class="asset">1M CAMPAIGN EXECUTION</div><div class="sub">Higher-timeframe bias → 1m main entry → confirmed pullback add-ons · Entry / SL / TP prices</div></div>
+      <div><div class="asset">1M CAMPAIGN EXECUTION</div><div class="sub">MBIE understands market → MTF combines all timeframes → Entry creates 1m Main/Add-on → Campaign controls Quantity / SL / TP / Total Risk</div></div>
       <div class="tag neutral">BTC + GOLD</div>
     </div>
     <div id="campaignSignals" class="campaign-assets"><div class="empty">Loading multi-timeframe campaign analysis…</div></div>
@@ -556,6 +573,62 @@ function renderAsset(id,a){
   `;
 }
 
+function renderMarketIntelligence(info,digits){
+  if(!info) return '<div class="mbie-card"><div class="mbie-title">MBIE · MARKET CONTEXT</div><div class="campaign-foot">Waiting for market intelligence.</div></div>';
+  const auction=info.auction_profile||{};
+  const liquidity=info.liquidity||{};
+  const zones=info.active_zones||{};
+  const momentum=info.momentum||{};
+  const volatility=info.volatility||{};
+  const flow=info.order_flow||{};
+  const volume=info.volume_behaviour||{};
+  const session=info.session||{};
+  const news=info.news_risk||{};
+  const nearest=(item,digits)=>item ? (item.label||item.name||'LEVEL')+' · '+n(item.price,digits)+(item.timeframe?' · '+item.timeframe:'') : '—';
+  const score=info.market_context_score===null||info.market_context_score===undefined?'—':n(info.market_context_score,1)+'/100';
+  const supply=(zones.supply||[]).length;
+  const demand=(zones.demand||[]).length;
+  const scenarios=Object.entries(info.scenarios||{}).map(([key,value])=>{
+    const title=key.replaceAll('_',' ').toUpperCase();
+    const evidence=(value.evidence||[]).slice(0,3).join(' · ')||'No supporting evidence yet';
+    const opposing=(value.opposing||[]).slice(0,2).join(' · ');
+    return '<div class="mbie-scenario"><b>'+title+'</b> '+tag(value.status||'DEVELOPING',value.status==='SUPPORTED'?'good':'warn')
+      +'<p>'+evidence+(opposing?' · Opposing: '+opposing:'')+'</p></div>';
+  }).join('');
+  const components=Object.entries(info.score_components||{}).map(([key,value])=>
+    '<span>'+key.replaceAll('_',' ')+' · '+(value.status||'UNAVAILABLE')+'</span>'
+  ).join('');
+  return '<div class="mbie-card">'
+    +'<div class="mbie-head"><div class="mbie-title">MBIE · MARKET UNDERSTANDING</div>'
+    +tag(info.market_regime||'WARMING UP',info.market_regime==='TRENDING'?'good':info.market_regime==='RANGING'?'warn':'neutral')+'</div>'
+    +'<div class="mbie-grid">'
+    +'<div class="mbie-item"><div class="k">Overall market bias</div><div class="v">'+(info.market_bias||'NEUTRAL')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Trend strength</div><div class="v">'+(info.trend_strength===null||info.trend_strength===undefined?'—':n(info.trend_strength,1)+'/100')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Context quality score</div><div class="v">'+score+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Data coverage</div><div class="v">'+n(info.data_coverage_pct||0,1)+'% of weighted inputs</div></div>'
+    +'<div class="mbie-item"><div class="k">Market phase</div><div class="v">'+(info.market_phase||'UNCLASSIFIED')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Structure event</div><div class="v">'+(info.structure_event||'—')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Liquidity sweep</div><div class="v">'+(liquidity.sweep||'NONE CONFIRMED')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Nearest buy-side liquidity</div><div class="v">'+nearest(info.nearest_buy_side_liquidity,digits)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Nearest sell-side liquidity</div><div class="v">'+nearest(info.nearest_sell_side_liquidity,digits)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Supply / Demand zones</div><div class="v">'+supply+' supply · '+demand+' demand</div></div>'
+    +'<div class="mbie-item"><div class="k">FVG / Order Block</div><div class="v">'+(zones.fvg?zones.fvg.side+' FVG':'No active FVG')+' · '+(zones.order_block?zones.order_block.side+' OB':'No candidate OB')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">POC / VAH / VAL</div><div class="v">'+n(auction.poc,digits)+' / '+n(auction.vah,digits)+' / '+n(auction.val,digits)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Volume behaviour</div><div class="v">'+(volume.status||'UNAVAILABLE')+' · RV '+n(volume.relative_volume,2)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Order flow</div><div class="v">'+(flow.status||'UNAVAILABLE')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Momentum / RSI / ADX</div><div class="v">'+(momentum.direction||'—')+' · '+n(momentum.rsi,1)+' / '+n(momentum.adx,1)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Volatility</div><div class="v">'+(volatility.state||'—')+' · ATR '+n(volatility.atr,3)+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Session</div><div class="v">'+(session.active||[]).join(' / ')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">News risk</div><div class="v">'+(news.status||'UNAVAILABLE')+'</div></div>'
+    +'<div class="mbie-item"><div class="k">Reversal warning</div><div class="v">'+((info.scenarios||{}).reversal_transition?.status||'DEVELOPING')+'</div></div>'
+    +'</div>'
+    +'<div class="mbie-subhead">MARKET SCENARIOS</div><div class="mbie-scenarios">'+scenarios+'</div>'
+    +'<div class="campaign-foot">Next confirmation: '+(info.next_confirmation_required||'—')+'</div>'
+    +'<div class="campaign-foot">Context score is not win probability. Auction profile status: '+(auction.status||'UNAVAILABLE')+'. Order-flow status: '+(flow.status||'UNAVAILABLE')+'.</div>'
+    +'<div class="mbie-subhead">DATA COVERAGE BY INPUT</div><div class="engine-contract">'+components+'</div>'
+    +'</div>';
+}
+
 function renderCampaigns(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
@@ -565,7 +638,7 @@ function renderCampaigns(payload){
   }
   const digitsFor=asset=>asset==='BTC'?1:3;
   const renderLevel=(label,value,digits,kind='')=>
-    '<div class="campaign-level '+kind+'"><div class="k">'+label+'</div><div class="v">'+(value===null||value===undefined?'—':n(value,digits))+'</div></div>';
+    '<div class="campaign-level '+kind+'"><div class="k">'+label+'</div><div class="v">'+(value===null||value===undefined?'—':typeof value==='number'?n(value,digits):value)+'</div></div>';
 
   root.innerHTML=assets.map(a=>{
     const digits=digitsFor(a.asset);
@@ -594,6 +667,7 @@ function renderCampaigns(payload){
         +renderLevel('Partial TP · 1R',execution.partial_take_profit,digits,'target')
         +renderLevel('Final TP · Liquidity',execution.take_profit,digits,'target')
         +'</div>'
+        +'<div class="campaign-meta">Quantity '+(execution.quantity===null||execution.quantity===undefined?'NOT CONFIGURED':n(execution.quantity,5))+' · '+(execution.quantity_status||'')+'</div>'
         +'<div class="campaign-meta">Score '+n(execution.score,1)+'/100 · Target '+n(execution.target_r,2)+'R · Risk allocation '+n(execution.risk_pct,2)+'%<br>'+execution.execution+'</div>'
         +'</article>';
     }
@@ -607,6 +681,7 @@ function renderCampaigns(payload){
         +renderLevel('Partial TP · 1R',p.partial_take_profit,digits,'target')
         +renderLevel('Final TP',p.take_profit,digits,'target')
         +'</div>'
+        +'<div class="campaign-meta">Quantity '+(p.quantity===null||p.quantity===undefined?'NOT CONFIGURED':n(p.quantity,5))+' · '+(p.quantity_status||'')+'</div>'
         +'<div class="campaign-meta">Risk allocation '+n(p.risk_pct,2)+'% · Setup score '+n(p.score,1)+'/100 · '+p.management+'</div>'
         +'</article>'
       ).join('');
@@ -631,11 +706,16 @@ function renderCampaigns(payload){
     return '<section class="campaign-asset">'
       +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b>'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
+      +renderMarketIntelligence(a.market_intelligence,digits)
+      +'<div class="campaign-meta">Entry Engine: '+((a.entry_engine||{}).status||'WAITING')+
+       ((a.entry_engine||{}).last_candidate?' · '+a.entry_engine.last_candidate.kind+' '+a.entry_engine.last_candidate.side+' · Score '+n(a.entry_engine.last_candidate.score,1)+'/100':'')+'</div>'
       +'<div class="campaign-meta">'+riskLine+'</div>'
       +'<div class="campaign-tf-row">'+tfHtml+'</div>'
+      +'<div class="campaign-meta">MTF '+(alignment.status||'WAITING')+' · 1m execution '+((alignment.execution_context||{}).status||'UNAVAILABLE')+' · conflicts '+((alignment.conflicting_timeframes||[]).map(x=>x.timeframe+' '+x.side).join(', ')||'none')+'</div>'
       +'<div class="campaign-foot">'+sourceNote+' Replay: '+n(replay.bars_processed||0,0)+' completed 1m candles · '+(replay.lookahead_safe?'point-in-time replay':'replay status unavailable')+'. Signals are simulated plans, not broker orders.</div>'
       +'<div class="campaign-foot">Replay metrics: '+n(performance.closed_positions||0,0)+' closed positions · Win rate '+winText+' · Profit factor '+pfText+' · Net '+n(performance.net_r||0,2)+'R · Max DD '+n(performance.max_drawdown_pct_of_equity||0,2)+'% · Fees/slippage excluded.</div>'
-      +(campaign.can_add_position?'':campaign.status==='ACTIVE'?'<div class="campaign-foot">Add-on entries are currently blocked by campaign limits or position availability.</div>':'')
+      +'<div class="engine-contract"><span><b>MBIE</b> Market only</span><span><b>MTF</b> Combine only</span><span><b>Entry</b> Main / Add-on only</span><span><b>Campaign</b> Quantity · SL · TP · Risk</span></div>'
+      +(campaign.can_add_position?'':campaign.status==='ACTIVE'?'<div class="campaign-foot">Add-on entries are blocked until all open stops are breakeven or better, fresh favorable extension is confirmed and total risk is within limit.</div>':'')
       +'</section>';
   }).join('');
 }

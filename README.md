@@ -78,3 +78,24 @@ Health should report \`vantage_mt5_bridge_secret_configured: true\`. In the snap
 - **Vantage feed stale:** keep the bridge process and terminal running; confirm the backend URL and network access.
 
 Never share the bridge secret in chat or commit it to the repository.
+
+
+## Four-engine strategy architecture (Sections 15 onward)
+
+The strategy extension is implemented as four separate runtime engines with one-way contracts:
+
+1. **MBIE — Market Behaviour Intelligence:** analyses regime, trend/structure, liquidity candidates, candle-derived zones, volume behaviour, momentum, volatility, an OHLCV-based auction-profile proxy, scenarios and data coverage. It never emits an entry signal.
+2. **Multi-Timeframe Engine:** combines completed Monthly, Weekly, Daily, 4H, 1H, 30M, 15M and 5M MBIE snapshots. It publishes directional agreement and conflicts; it does not rewrite the underlying timeframe analysis.
+3. **Entry Engine:** consumes MBIE + MTF context and emits only a 1m MAIN or ADD-ON candidate after sweep/rejection, BOS/MSS, displacement and FVG/OB retest. It does not set quantity, SL or TP.
+4. **Campaign Engine:** is the only engine allowed to build the order plan, estimate quantity, choose the directional liquidity target, set SL/TP, enforce per-position and total campaign risk, protect add-ons, and manage partial exits / invalidation.
+
+### Data and risk configuration
+
+- Optional estimated quantity requires `AST_CAMPAIGN_ACCOUNT_EQUITY` plus an asset-specific contract-value setting: `AST_CAMPAIGN_BTC_VALUE_PER_PRICE_UNIT` or `AST_CAMPAIGN_GOLD_VALUE_PER_PRICE_UNIT`. If either is absent, quantity is shown as unavailable rather than guessed.
+- Add-ons are blocked until existing positions are protected at breakeven or better, a favorable price extension has occurred, and the total campaign risk limit remains satisfied.
+- Historical bid/ask footprint, DOM, absorption and economic-news feeds are unavailable in the current candle replay and are explicitly marked unavailable.
+- POC/VAH/VAL are currently a typical-price × candle-volume OHLCV proxy, not exchange trade-level volume profile. Session tags use UTC-window approximations until an exchange-calendar / DST-aware session feed is connected.
+- Historical replay remains point-in-time and uses completed candles. Fees and slippage are excluded; all fills are simulated, and no broker orders are placed by this service.
+
+
+The full strategy document is maintained in `AST_PYRAMID_STRATEGY_COMPLETE.md`: original Sections 1–14, MBIE Section 15, and the explicit four-engine responsibility architecture in Section 16.
