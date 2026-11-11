@@ -3,6 +3,7 @@
 ## Historical data sources
 
 - BTC uses Binance USD-M Futures public archives and the live Binance Futures stream.
+- BTC historical OHLC is loaded from native Binance USD-M archives independently for 1m, 5m, 15m, 30m, 1h, 4h and 1d. Up to 25,000 closed candles per timeframe are retained; 1m resampling is only a fallback when a native interval archive is unavailable.
 - GOLD uses Yahoo Finance COMEX continuous gold futures (GC=F) as a fallback reference until the Windows MT5 bridge supplies native Vantage XAUUSD broker candles. Once connected, GOLD structure and levels switch to the direct broker OHLC feed.
 - The Vantage MT5 bridge forwards broker bid/ask/last ticks and native GOLD OHLC candles to the dashboard. It is read-only; it does not place or manage trades.
 
