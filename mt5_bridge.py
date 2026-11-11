@@ -33,14 +33,16 @@ PRICE_SIDE = os.getenv("MT5_PRICE_SIDE", "bid").strip().lower()
 POLL_SECONDS = max(0.25, float(os.getenv("MT5_POLL_SECONDS", "0.5")))
 
 GOLD_CANDLE_SYNC_SECONDS = max(2.0, float(os.getenv("MT5_GOLD_CANDLE_SYNC_SECONDS", "5")))
+# Request up to the backend history cap. Actual rows depend on Vantage availability
+# and MT5 Tools > Options > Charts > Max bars.
 GOLD_HISTORY_BARS = {
-    "1m": 3000,
-    "5m": 2500,
-    "15m": 2000,
-    "30m": 1500,
-    "1h": 1000,
-    "4h": 750,
-    "1d": 500,
+    "1m": 25_000,
+    "5m": 25_000,
+    "15m": 25_000,
+    "30m": 25_000,
+    "1h": 25_000,
+    "4h": 25_000,
+    "1d": 25_000,
 }
 MT5_TIMEFRAMES = {
     "1m": mt5.TIMEFRAME_M1,
@@ -164,7 +166,7 @@ def sync_gold_candles(
         f"{BACKEND_URL}/api/vantage/mt5/candles",
         headers=headers,
         json=payload,
-        timeout=15 if bootstrap else 6,
+        timeout=60 if bootstrap else 6,
     )
     response.raise_for_status()
     result = response.json()
