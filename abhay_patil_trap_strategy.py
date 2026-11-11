@@ -213,7 +213,7 @@ class AbhayPatilBlackBoxTrapStrategy:
                 risk = trigger - stop
                 signal = {
                     "timeframe": timeframe, "trap_type": "BEAR TRAP", "side": "BUY",
-                    "sweep_side": "SELL-SIDE / SUPPORT",
+                    "break_side": "SUPPORT BREAK",
                     "break_level": bear_alert_level, "reclaim_level": support,
                     "signal_time": candle["t"], "signal_index": index,
                     "reclaim_high": trigger, "reclaim_low": stop,
@@ -240,7 +240,7 @@ class AbhayPatilBlackBoxTrapStrategy:
                 risk = stop - trigger
                 signal = {
                     "timeframe": timeframe, "trap_type": "BULL TRAP", "side": "SELL",
-                    "sweep_side": "BUY-SIDE / RESISTANCE",
+                    "break_side": "RESISTANCE BREAK",
                     "break_level": bull_alert_level, "reclaim_level": resistance,
                     "signal_time": candle["t"], "signal_index": index,
                     "reclaim_high": stop, "reclaim_low": trigger,
