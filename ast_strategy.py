@@ -301,7 +301,8 @@ class ASTStructureStrategy:
         values = (entry_low, entry_high, stop_loss)
         if not all(math.isfinite(float(value)) and float(value) > 0 for value in values):
             return None
-        low, high, stop = sorted((float(entry_low), float(entry_high)))[:2] if entry_low > entry_high else (float(entry_low), float(entry_high))
+        low, high = sorted((float(entry_low), float(entry_high)))
+        stop = float(stop_loss)
         if high <= low:
             return None
         entry = (low + high) / 2.0
