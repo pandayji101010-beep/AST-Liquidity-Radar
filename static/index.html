@@ -228,7 +228,7 @@ function renderTradeLevels(assetData){
       const content=plans.map(item=>{
         const setup=item.setup;
         const plan=item.plan;
-        const side=plan?.side||setup.side||setup.direction||'—';
+        const side=plan?.side||setup.side||((setup.status && setup.status!=='WAITING' && setup.status!=='WARMING UP')?setup.direction:null)||'—';
         const sideColor=side==='BUY'?'var(--green)':side==='SELL'?'var(--red)':'var(--muted)';
         if(!plan){
           let watch='No confirmed trade plan';
@@ -245,7 +245,7 @@ function renderTradeLevels(assetData){
           + '<div class="trade-engine-title"><span>'+item.label+'</span>'+tag(plan.side+' · '+setup.status,'good')+'</div>'
           + '<div class="trade-wait">'+tag(plan.entry_state,stateKind)+'</div>'
           + '<div class="trade-grid">'
-          + '<div class="trade-level entry"><div class="k">Entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
+          + '<div class="trade-level entry"><div class="k">'+plan.side+' entry zone</div><div class="v">'+n(plan.entry_low,digits)+' – '+n(plan.entry_high,digits)+'</div></div>'
           + '<div class="trade-level stop"><div class="k">Stop loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
           + '<div class="trade-level target"><div class="k">TP1 · 1.5R</div><div class="v">'+n(plan.take_profit_1,digits)+'</div></div>'
           + '<div class="trade-level target"><div class="k">TP2 · 2R</div><div class="v">'+n(plan.take_profit_2,digits)+'</div></div>'
