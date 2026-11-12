@@ -685,8 +685,9 @@ function renderLiquidityLevels(asset,digits){
       cleared.buy_side?'Buy '+cleared.buy_side.event+' @ '+n(cleared.buy_side.price,digits):null,
       cleared.sell_side?'Sell '+cleared.sell_side.event+' @ '+n(cleared.sell_side.price,digits):null
     ].filter(Boolean).join(' · ');
+    const timeframeLabel={"1M":"1MO","1w":"1W","1d":"1D","4h":"4H","1h":"1H","30m":"30M","15m":"15M","5m":"5M","1m":"1MIN"}[tf]||tf.toUpperCase();
     return '<article class="liquidity-tf">'
-      +'<div class="liquidity-tf-head"><b>'+tf.toUpperCase()+'</b><span>'+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+'</span></div>'
+      +'<div class="liquidity-tf-head"><b>'+timeframeLabel+'</b><span>'+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+'</span></div>'
       +sideHtml(buy,'buy')+sideHtml(sell,'sell')
       +'<div class="liquidity-cleared">'+(clearText?'Last cleared · '+clearText:'Last cleared · None recorded')+'</div>'
       +'</article>';
