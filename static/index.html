@@ -573,8 +573,8 @@ function renderAsset(id,a){
   const bullNum=bull===null||bull===undefined?'—':n(bull,0);
   const bearNum=bear===null||bear===undefined?'—':n(bear,0);
   el.innerHTML=`
-    <div class="head"><div><div class="asset">${a.asset==='BTC'?'BITCOIN':'GOLD'}</div><div class="symbol">${a.exchange_symbol} · ${a.asset==='BTC'?'Binance USDⓈ-M Futures':(directGold?'Vantage MT5 broker feed':'COMEX gold futures reference')}</div></div>${tag(pressure,pressureKind)}</div>
-    <div class="price">${price}</div><div class="small">${a.asset==='BTC'?'Binance Futures mark price':(directGold?'Vantage MT5 broker price':'Gold futures reference price')} · Vantage live quote: <b>${mappedPrice}</b></div><div class="tiny">${a.historical_source||'Historical source unavailable'}</div>
+    <div class="head"><div><div class="asset">${a.asset==='BTC'?'BITCOIN':'GOLD'}</div><div class="symbol">${a.exchange_symbol} · ${a.asset==='BTC'?'Binance USDⓈ-M Futures':(directGold?'Vantage MT5 broker feed':(String(a.historical_source||'').includes('Binance Futures TradFi')?'Binance TradFi Perpetual':'COMEX gold futures reference'))}</div></div>${tag(pressure,pressureKind)}</div>
+    <div class="price">${price}</div><div class="small">${a.asset==='BTC'?'Binance Futures mark price':(directGold?'Vantage MT5 broker price':(String(a.historical_source||'').includes('Binance Futures TradFi')?'Binance XAUUSDT live continuous-kline price':'Gold futures reference price'))} · Vantage live quote: <b>${mappedPrice}</b></div><div class="tiny">${a.historical_source||'Historical source unavailable'}</div>
     <div class="small" style="margin-top:4px">${directGold?`Direct Vantage MT5 OHLC · ${a.vantage_ticker||'XAUUSD'} · ${a.broker_candle_age_seconds??'—'}s candle sync`:(mappedFresh?`Basis ratio ${Number(a.basis_ratio).toFixed(6)} · ${a.vantage_ticker||'Vantage feed'} · ${a.vantage_timeframe||'TF'}`:'Vantage MT5 bridge not calibrated / stale')} ${a.asset==='GOLD'&&a.commodity_session?.status?` · Commodity session: ${a.commodity_session.status}`:''}</div>
     <div class="scoregrid">
       <div class="score"><div class="small">BULLISH PRESSURE INDEX</div><div class="num" style="color:var(--green)">${bullNum}<span class="small"> / 100</span></div><div class="bar"><div class="fill green" style="width:${bull||0}%"></div></div></div>
@@ -741,9 +741,10 @@ function renderCampaigns(payload){
       statusText.includes('ACTIVE')?'good':
       statusText.includes('WAITING')?'warn':'neutral';
     const price=a.live_reference_price;
+    const goldBinanceSource=String(a.data_source||'').includes('Binance Futures TradFi Perpetual XAUUSDT');
     const sourceNote=a.asset==='GOLD'&&!a.broker_candle_feed
-      ? 'Gold reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.'
-      : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USD-M BTCUSDT candles.');
+      ? (goldBinanceSource?'Binance XAUUSDT TradFi Perpetual candles are active; Vantage XAUUSD broker OHLC bridge is separate and not connected.':'Yahoo GC=F reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.')
+      : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USDⓈ-M BTCUSDT candles.');
     let cards='';
 
     if(execution && execution.status==='ENTRY READY · NEXT 1M OPEN'){
