@@ -517,7 +517,7 @@ body{
   .auto-refresh-toggle{padding:7px 9px;font-size:10px}
   #notificationStatus{flex-basis:100%;justify-content:flex-end;font-size:10px}
 }
-</style>
+.campaign-live-prices{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.campaign-live-price{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12px}.campaign-live-price b{font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.campaign-live-price span{color:var(--muted);font-size:10px;letter-spacing:.06em}.campaign-live-price .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 7px var(--green)}@media(max-width:680px){.campaign-live-prices{justify-content:flex-start;margin-top:8px}.campaign-live-price{padding:6px 8px}}</style>
 </head>
 <body>
 <div class="wrap">
@@ -537,7 +537,7 @@ body{
   <section class="card full" id="campaignSection">
     <div class="head">
       <div><div class="asset">1M CAMPAIGN EXECUTION</div><div class="sub">MBIE understands market → MTF combines all timeframes → Entry creates 1m Main/Add-on → Campaign controls Quantity / SL / TP / Total Risk</div></div>
-      <div class="tag neutral">BTC + GOLD</div>
+      <div id="campaignLivePrices" class="campaign-live-prices"><div class="campaign-live-price"><span>BTC</span><b>—</b></div><div class="campaign-live-price"><span>GOLD</span><b>—</b></div></div>
     </div>
     <div id="campaignSignals" class="campaign-assets"><div class="empty">Loading multi-timeframe campaign analysis…</div></div>
   </section>
@@ -725,6 +725,17 @@ function renderCampaigns(payload){
     return;
   }
   const digitsFor=asset=>asset==='BTC'?1:3;
+  const tape=$('campaignLivePrices');
+  if(tape){
+    const byAsset=Object.fromEntries(assets.map(a=>[a.asset,a]));
+    tape.innerHTML=['BTC','GOLD'].map(symbol=>{
+      const item=byAsset[symbol]||{};
+      const live=Number(item.live_reference_price);
+      const fresh=Number.isFinite(live)&&live>0;
+      const source=symbol==='BTC'?'BINANCE LIVE':(item.broker_candle_feed?'VANTAGE LIVE':'XAUUSDT LIVE');
+      return '<div class="campaign-live-price"><i class="live-dot"></i><span>'+symbol+' · '+source+'</span><b>'+(fresh?n(live,digitsFor(symbol)):'Waiting…')+'</b></div>';
+    }).join('');
+  }
   const renderLevel=(label,value,digits,kind='')=>
     '<div class="campaign-level '+kind+'"><div class="k">'+label+'</div><div class="v">'+(value===null||value===undefined?'—':typeof value==='number'?n(value,digits):value)+'</div></div>';
 
