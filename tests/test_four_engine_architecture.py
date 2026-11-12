@@ -171,9 +171,12 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertEqual(swept["last_cleared"]["buy_side"]["event"], "SWEPT")
 
         # Only on the following 5m candle can the next untouched level activate.
+        # The swept 110 price is deliberately presented again under an alternate
+        # source label/time; it must not reactivate as if it were fresh liquidity.
         bars.append({"t": t0 + 1_200_000, "o": 109.2, "h": 110.0, "l": 108.8, "c": 109.5, "v": 100})
         next_pool = mbie._update_persistent_liquidity(bars, "5m", {
-            "prior_high": 112.0, "prior_high_time": t0 + 1_200_000,
+            "equal_high": 110.0, "equal_high_time": t0 + 600_000,
+            "swing_high": 112.0, "pivot_high_time": t0 + 1_200_000,
             "prior_low": 95.0, "prior_low_time": t0,
         })
         self.assertEqual(next_pool["buy_side"]["price"], 112.0)

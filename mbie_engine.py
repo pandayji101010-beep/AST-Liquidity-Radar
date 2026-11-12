@@ -67,6 +67,17 @@ class ASTMarketBehaviourIntelligenceEngine:
         }
 
     @staticmethod
+    def _candidate_was_consumed(state: dict[str, Any], side: str, candidate: dict[str, Any], base: dict[str, Any]) -> bool:
+        price = float(candidate["price"])
+        tolerance = max(float(base.get("atr") or 0.0) * 0.05, abs(price) * 0.00001, 1e-8)
+        for cleared in state["consumed_levels"].get(side, []):
+            # A same-price pool is new only when its source pivot/range candle formed
+            # after the prior pool was actually swept or broken.
+            if int(candidate["source_time"]) <= int(cleared["time"]) and abs(price - float(cleared["price"])) <= tolerance:
+                return True
+        return False
+
+    @staticmethod
     def _liquidity_cross(level: dict[str, Any], candle: dict[str, Any]) -> str | None:
         price = float(level["price"])
         side = level["side"]
@@ -112,6 +123,7 @@ class ASTMarketBehaviourIntelligenceEngine:
             "last_bar_time": None,
             "active": {"BUY_SIDE": None, "SELL_SIDE": None},
             "consumed_ids": set(),
+            "consumed_levels": {"BUY_SIDE": [], "SELL_SIDE": []},
             "last_cleared": {"BUY_SIDE": None, "SELL_SIDE": None},
         })
         last_time = int(bars[-1]["t"])
@@ -132,9 +144,11 @@ class ASTMarketBehaviourIntelligenceEngine:
                             break
                     if crossed:
                         state["consumed_ids"].add(candidate["id"])
+                        clear_time = int(historical_bar["t"])
+                        state["consumed_levels"][side].append({"price": candidate["price"], "time": clear_time})
                         state["last_cleared"][side] = {
                             "price": candidate["price"], "label": candidate["label"],
-                            "event": crossed, "time": int(historical_bar["t"]),
+                            "event": crossed, "time": clear_time,
                             "timeframe": timeframe,
                         }
                         continue
@@ -158,6 +172,7 @@ class ASTMarketBehaviourIntelligenceEngine:
                     event = self._liquidity_cross(active, candle)
                     if event:
                         state["consumed_ids"].add(active["id"])
+                        state["consumed_levels"][side].append({"price": active["price"], "time": candle_time})
                         state["last_cleared"][side] = {
                             "price": active["price"], "label": active["label"],
                             "event": event, "time": candle_time,
@@ -171,14 +186,16 @@ class ASTMarketBehaviourIntelligenceEngine:
                 if state["active"].get(side) is not None or side in consumed_now:
                     continue
                 for candidate in candidates[side]:
-                    if candidate["id"] in state["consumed_ids"]:
+                    if candidate["id"] in state["consumed_ids"] or self._candidate_was_consumed(state, side, candidate, frame_base):
                         continue
                     # Never activate a level that this same completed candle has touched.
-                    if self._liquidity_cross(candidate, candle):
+                    event = self._liquidity_cross(candidate, candle)
+                    if event:
                         state["consumed_ids"].add(candidate["id"])
+                        state["consumed_levels"][side].append({"price": candidate["price"], "time": candle_time})
                         state["last_cleared"][side] = {
                             "price": candidate["price"], "label": candidate["label"],
-                            "event": self._liquidity_cross(candidate, candle),
+                            "event": event,
                             "time": candle_time, "timeframe": timeframe,
                         }
                         continue
