@@ -33,6 +33,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertIn(frame["market_regime"], ("TRENDING", "RANGING", "TREND TRANSITION", "DEVELOPING"))
         summary = mbie.summarize({}, frame, {"status": "WAITING", "side": None, "candidate_side": None})
         self.assertIn("market_context_score", summary)
+        self.assertIn("scalping_liquidity", summary)
         self.assertIn("data_coverage_pct", summary)
         self.assertEqual(summary["order_flow"]["status"], "UNAVAILABLE")
         self.assertEqual(summary["news_risk"]["status"], "UNAVAILABLE")
