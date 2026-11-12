@@ -11,8 +11,8 @@ from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy as 
 class ASTMarketBehaviourIntelligenceEngine:
     """MBIE: market understanding only. It never creates or approves orders."""
 
-    SCALP_MIN_DISTANCE_PIPS = 100.0
-    SCALP_MAX_DISTANCE_PIPS = 500.0
+    SCALP_MIN_DISTANCE_PIPS = 90.0
+    SCALP_MAX_DISTANCE_PIPS: float | None = None
     SCALP_PIVOT_LOOKBACK = 48
 
     SCORE_WEIGHTS = {
@@ -82,8 +82,8 @@ class ASTMarketBehaviourIntelligenceEngine:
         base: dict[str, Any],
         close: float,
         pip_size: float,
-        min_pips: float = 100.0,
-        max_pips: float = 500.0,
+        min_pips: float = 90.0,
+        max_pips: float | None = None,
         excluded_prices: dict[str, list[float]] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """Find confirmed local highs/lows inside the scalp-distance band."""
@@ -114,7 +114,7 @@ class ASTMarketBehaviourIntelligenceEngine:
                 return
             distance_points = price - close if side == "BUY_SIDE" else close - price
             distance_pips = distance_points / pip_size
-            if distance_pips < min_pips or distance_pips > max_pips:
+            if distance_pips < min_pips or (max_pips is not None and distance_pips > max_pips):
                 return
             # Never reuse the same structural price already displayed as swing liquidity.
             exclusion_tolerance = max(pip_size * 2.0, abs(price) * 1e-7, 1e-8)
@@ -546,7 +546,7 @@ class ASTMarketBehaviourIntelligenceEngine:
         scalping_liquidity = self._update_persistent_liquidity(
             clean, timeframe, base, candidate_builder=scalp_builder,
             state_key=f"{timeframe}:SCALP",
-            max_active_distance_pips=self.SCALP_MAX_DISTANCE_PIPS,
+            max_active_distance_pips=None,
             pip_size=pip_size,
         )
         scalping_liquidity["pip_size"] = pip_size
