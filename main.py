@@ -1315,7 +1315,17 @@ async def health() -> dict[str, Any]:
         "campaign_alerts_enabled": CAMPAIGN_ALERTS_ENABLED,
         "campaign_alert_poll_seconds": CAMPAIGN_ALERT_POLL_SECONDS if CAMPAIGN_ALERTS_ENABLED else None,
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
-        "data_sources": {key: {"source": state.data_source, "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES}, "error": state.connection_error} for key, state in states.items()},
+        "data_sources": {
+            key: {
+                "source": state.data_source,
+                "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES},
+                "error": state.connection_error,
+                "binance_tradfi_stream_active": state.binance_tradfi_stream_active,
+                "binance_tradfi_feed_age_seconds": round((now_ms() - state.binance_tradfi_last_update_ts) / 1000, 1) if state.binance_tradfi_last_update_ts else None,
+                "vantage_broker_candles_active": state.broker_candle_feed,
+            }
+            for key, state in states.items()
+        },
     }
 
 
