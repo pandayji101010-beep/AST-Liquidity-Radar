@@ -304,7 +304,7 @@ async def load_binance_tradfi_gold_history(
 ) -> dict[str, Any]:
     """Load native XAUUSDT TradFi perpetual OHLCV for every dashboard timeframe."""
     limits = {
-        "1m": min(max(1, limit), 4_500),
+        "1m": min(max(1, limit), 25_000),
         "5m": min(max(1, limit), 1_500),
         "15m": min(max(1, limit), 1_500),
         "30m": min(max(1, limit), 1_500),
