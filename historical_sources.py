@@ -372,8 +372,8 @@ async def load_binance_tradfi_gold_history(
         "(native intervals)"
     )
 
-    if len(data.get("1m", [])) < 25:
-        log.warning("Binance XAUUSDT continuousKlines REST did not return enough 1m history; trying Binance public archives")
+    if any(len(data.get(tf, [])) < 25 for tf in ("1m", "1d", "4h")):
+        log.warning("Binance XAUUSDT continuousKlines REST history is incomplete; trying Binance public archives")
         archived = await _load_binance_tradfi_gold_archive(client, limit)
         archive_data = archived["candles"]
         for timeframe in TIMEFRAMES_GOLD:
