@@ -184,8 +184,8 @@ class FourEngineArchitectureTests(unittest.TestCase):
     def test_scalping_liquidity_finds_micro_pools_inside_the_100_to_500_pip_band(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
         t0 = 1_700_000_000_000
-        highs = [1110, 1120, 1300, 1120, 1115, 1105, 1108, 1110, 1107]
-        lows = [890, 880, 700, 880, 885, 895, 892, 890, 893]
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
         bars = [
             {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
             for i in range(len(highs))
@@ -203,12 +203,18 @@ class FourEngineArchitectureTests(unittest.TestCase):
     def test_scalping_pool_has_an_independent_lock_and_clears_on_its_own_timeframe_sweep(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
         t0 = 1_700_000_000_000
-        highs = [1110, 1120, 1300, 1120, 1115, 1105, 1108, 1110, 1107]
-        lows = [890, 880, 700, 880, 885, 895, 892, 890, 893]
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
         bars = [
             {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
             for i in range(len(highs))
         ]
+        # Seed the swing layer separately; a scalp sweep must not consume it.
+        swing = mbie._update_persistent_liquidity(bars, "5m", {
+            "prior_high": 1600.0, "prior_high_time": t0 - 60_000,
+            "prior_low": 400.0, "prior_low_time": t0 - 60_000,
+        })
+        self.assertEqual(swing["buy_side"]["price"], 1600.0)
         builder = lambda rows, frame, close: mbie._scalping_liquidity_candidates(
             rows, "5m", frame, close, pip_size=1.0,
         )
