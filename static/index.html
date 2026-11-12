@@ -881,8 +881,9 @@ $('refreshInterval').addEventListener('change',configureAutoRefresh);
 
 let livePriceSocket=null;
 let livePriceReconnectTimer=null;
+let livePricePaused=false;
 function connectLivePrices(){
-  if(!('WebSocket' in window)) return;
+  if(livePricePaused || !('WebSocket' in window)) return;
   if(livePriceSocket && (livePriceSocket.readyState===WebSocket.OPEN || livePriceSocket.readyState===WebSocket.CONNECTING)) return;
   const scheme=location.protocol==='https:'?'wss:':'ws:';
   livePriceSocket=new WebSocket(scheme+'//'+location.host+'/ws/prices');
@@ -901,15 +902,22 @@ function connectLivePrices(){
   livePriceSocket.onclose=()=>{
     livePriceSocket=null;
     if(livePriceReconnectTimer!==null) clearTimeout(livePriceReconnectTimer);
-    livePriceReconnectTimer=setTimeout(connectLivePrices,1200);
+    if(!livePricePaused) livePriceReconnectTimer=setTimeout(connectLivePrices,1200);
   };
   livePriceSocket.onerror=()=>{try{livePriceSocket?.close();}catch(error){}};
 }
 connectLivePrices();
 $('refreshToggle').addEventListener('click',()=>{
   refreshPaused=!refreshPaused;
+  livePricePaused=refreshPaused;
   configureAutoRefresh();
-  if(!refreshPaused) refresh();
+  if(refreshPaused){
+    if(livePriceReconnectTimer!==null) clearTimeout(livePriceReconnectTimer);
+    livePriceSocket?.close();
+  }else{
+    connectLivePrices();
+    refresh();
+  }
 });
 refresh();
 configureAutoRefresh();
