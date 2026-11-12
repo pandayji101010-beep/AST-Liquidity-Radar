@@ -144,4 +144,6 @@ The live Entry Engine now uses a balanced threshold profile to improve setup fre
 - BTC uses the dashboard convention of 1 pip = $1. GOLD/XAUUSD uses 1 pip = $0.01. The term pip is a display convention here; exchange/broker tick sizes and contract specifications can differ.
 - Buy-side and sell-side scalp pools have separate state from swing pools and from every other timeframe. A lower-timeframe wick cannot clear a higher-timeframe pool. The replacement is selected only on the next completed candle after a clear.
 - These remain OHLC-derived reference levels, not verified resting stop orders or guaranteed 100–500 pip trade targets. A level is a potential liquidity objective, not an entry signal or win-rate claim.
+- Scalp pools never reuse the same price as the frame's prior high/low, confirmed swing high/low, equal-high/low candidates, or currently locked swing pool. If there is no distinct 100–500 pip micro pool, the scalp side remains empty instead of copying the swing level.
+- An active scalp pool expires when price moves more than 500 pips away without taking it. It is not kept as a swing-style locked target; the next eligible micro pool can be seeded after the expiry candle.
 

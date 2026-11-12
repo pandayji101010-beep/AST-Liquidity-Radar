@@ -238,6 +238,56 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertEqual(swept["last_cleared"]["buy_side"]["event"], "SWEPT")
         self.assertIsNotNone(mbie._liquidity_trackers["5m"]["active"]["BUY_SIDE"])
 
+    def test_scalping_candidates_exclude_prices_already_used_by_swing_liquidity(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
+        bars = [
+            {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
+            for i in range(len(highs))
+        ]
+        candidates = mbie._scalping_liquidity_candidates(
+            bars, "1m", {"atr": 20.0}, 1000.0, pip_size=1.0,
+            excluded_prices={"BUY_SIDE": [1300.0], "SELL_SIDE": [700.0]},
+        )
+        self.assertTrue(all(item["price"] != 1300.0 for item in candidates["BUY_SIDE"]))
+        self.assertTrue(all(item["price"] != 700.0 for item in candidates["SELL_SIDE"]))
+
+    def test_scalping_pool_expires_when_it_drifts_beyond_500_pips(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
+        bars = [
+            {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
+            for i in range(len(highs))
+        ]
+        builder = lambda rows, frame, close: mbie._scalping_liquidity_candidates(
+            rows, "5m", frame, close, pip_size=1.0,
+        )
+        seeded = mbie._update_persistent_liquidity(
+            bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
+            max_active_distance_pips=500, pip_size=1.0,
+        )
+        self.assertEqual(seeded["buy_side"]["price"], 1300.0)
+
+        # Price moves away without touching the buy-side pool: 510 pips away.
+        bars.append({
+            "t": t0 + len(bars) * 60_000,
+            "o": 800.0, "h": 850.0, "l": 770.0, "c": 790.0, "v": 100,
+        })
+        expired = mbie._update_persistent_liquidity(
+            bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
+            max_active_distance_pips=500, pip_size=1.0,
+        )
+        self.assertIsNone(expired["buy_side"])
+        self.assertEqual(
+            expired["last_cleared"]["buy_side"]["event"],
+            "EXPIRED_OUTSIDE_SCALP_WINDOW",
+        )
+        self.assertEqual(expired["last_cleared"]["buy_side"]["distance_pips"], 510.0)
+
     def test_persistent_liquidity_state_is_separate_for_each_timeframe(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
         t0 = 1_700_000_000_000

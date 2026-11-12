@@ -84,6 +84,7 @@ class ASTMarketBehaviourIntelligenceEngine:
         pip_size: float,
         min_pips: float = 100.0,
         max_pips: float = 500.0,
+        excluded_prices: dict[str, list[float]] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """Find confirmed local highs/lows inside the scalp-distance band."""
         found: dict[str, list[dict[str, Any]]] = {"BUY_SIDE": [], "SELL_SIDE": []}
@@ -114,6 +115,14 @@ class ASTMarketBehaviourIntelligenceEngine:
             distance_points = price - close if side == "BUY_SIDE" else close - price
             distance_pips = distance_points / pip_size
             if distance_pips < min_pips or distance_pips > max_pips:
+                return
+            # Never reuse the same structural price already displayed as swing liquidity.
+            exclusion_tolerance = max(pip_size * 2.0, abs(price) * 1e-7, 1e-8)
+            if any(
+                isinstance(level, (int, float))
+                and abs(float(level) - price) <= exclusion_tolerance
+                for level in (excluded_prices or {}).get(side, [])
+            ):
                 return
             if any(abs(float(item["price"]) - price) <= pip_size * 0.25 for item in found[side]):
                 return
@@ -205,6 +214,8 @@ class ASTMarketBehaviourIntelligenceEngine:
         base: dict[str, Any],
         candidate_builder: Any = None,
         state_key: str | None = None,
+        max_active_distance_pips: float | None = None,
+        pip_size: float | None = None,
     ) -> dict[str, Any]:
         if not bars:
             return {
@@ -277,6 +288,33 @@ class ASTMarketBehaviourIntelligenceEngine:
                         }
                         state["active"][side] = None
                         consumed_now.add(side)
+                        continue
+
+                    # Scalping pools are only useful while they remain within the
+                    # configured maximum distance. Unlike swing pools, stale scalp
+                    # pools expire instead of drifting thousands of pips away.
+                    if (
+                        candidate_builder is not None
+                        and max_active_distance_pips is not None
+                        and isinstance(pip_size, (int, float))
+                        and float(pip_size) > 0
+                    ):
+                        frame_close_now = float(candle["c"])
+                        gap_points = (
+                            float(active["price"]) - frame_close_now
+                            if side == "BUY_SIDE"
+                            else frame_close_now - float(active["price"])
+                        )
+                        gap_pips = gap_points / float(pip_size)
+                        if gap_pips > float(max_active_distance_pips):
+                            state["last_cleared"][side] = {
+                                "price": active["price"], "label": active["label"],
+                                "event": "EXPIRED_OUTSIDE_SCALP_WINDOW",
+                                "distance_pips": round(gap_pips, 1),
+                                "time": candle_time, "timeframe": timeframe,
+                            }
+                            state["active"][side] = None
+                            consumed_now.add(side)
 
             frame_close = float(candle["c"])
             candidates = candidates_for(frame_bars, frame_base, frame_close)
@@ -479,13 +517,37 @@ class ASTMarketBehaviourIntelligenceEngine:
         sell_side = sorted((x for x in levels if x["side"] == "SELL_SIDE" and x["price"] < price), key=lambda x: x["price"], reverse=True)
         persistent_liquidity = self._update_persistent_liquidity(clean, timeframe, base)
         pip_size = self._pip_size_for_asset(asset)
-        scalp_builder = lambda frame_bars, frame_base, frame_close: self._scalping_liquidity_candidates(
-            frame_bars, timeframe, frame_base, frame_close, pip_size,
-            self.SCALP_MIN_DISTANCE_PIPS, self.SCALP_MAX_DISTANCE_PIPS,
-        )
+        def scalp_builder(frame_bars, frame_base, frame_close):
+            exclusions = {"BUY_SIDE": [], "SELL_SIDE": []}
+            for side, keys in (
+                ("BUY_SIDE", ("prior_high", "swing_high", "equal_high")),
+                ("SELL_SIDE", ("prior_low", "swing_low", "equal_low")),
+            ):
+                for key in keys:
+                    value = frame_base.get(key)
+                    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                        exclusions[side].append(float(value))
+
+            # Also exclude the currently locked swing pool, even if it originated
+            # before the current frame's rolling candidate window.
+            swing_state = self._liquidity_trackers.get(timeframe, {})
+            swing_active = swing_state.get("active", {})
+            for side in ("BUY_SIDE", "SELL_SIDE"):
+                active_swing = swing_active.get(side)
+                if active_swing and isinstance(active_swing.get("price"), (int, float)):
+                    exclusions[side].append(float(active_swing["price"]))
+
+            return self._scalping_liquidity_candidates(
+                frame_bars, timeframe, frame_base, frame_close, pip_size,
+                self.SCALP_MIN_DISTANCE_PIPS, self.SCALP_MAX_DISTANCE_PIPS,
+                excluded_prices=exclusions,
+            )
+
         scalping_liquidity = self._update_persistent_liquidity(
             clean, timeframe, base, candidate_builder=scalp_builder,
             state_key=f"{timeframe}:SCALP",
+            max_active_distance_pips=self.SCALP_MAX_DISTANCE_PIPS,
+            pip_size=pip_size,
         )
         scalping_liquidity["pip_size"] = pip_size
         scalping_liquidity["pip_definition"] = "BTC: $1 per pip; GOLD/XAUUSD: $0.01 per pip"

@@ -680,7 +680,7 @@ function renderLiquidityLevels(asset,digits){
       const isScalp=layer==='scalp';
       const sideLabel=side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓';
       if(!level){
-        const waitText=isScalp?'No untouched pool in 100–500 pip band':'Waiting for untouched swing liquidity';
+        const waitText=isScalp?'No separate micro pool in 100–500 pip band (swing levels excluded)':'Waiting for untouched swing liquidity';
         return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>—</strong><small>'+waitText+'</small></div>';
       }
       const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
