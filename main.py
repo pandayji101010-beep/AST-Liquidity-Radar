@@ -944,6 +944,7 @@ async def gold_tradfi_stream_worker() -> None:
     ]
     url = MARKET_WS_BASE + "?streams=" + "/".join(streams)
     state = states["GOLD"]
+    logged_timeframes: set[str] = set()
 
     while True:
         try:
@@ -972,6 +973,11 @@ async def gold_tradfi_stream_worker() -> None:
                             "Received Binance XAUUSDT TradFi continuous-kline packet: timeframe=%s close=%s contractType=%s",
                             timeframe, price, contract_type,
                         )
+                    if timeframe not in logged_timeframes:
+                        logged_timeframes.add(timeframe)
+                        log.info("First Binance Gold %s stream update received: close=%s candle_closed=%s", timeframe, price, bool(k.get("x")))
+                    if k.get("x") and timeframe in TIMEFRAMES:
+                        log.info("Binance Gold %s closed candle received; current stored bars=%s", timeframe, len(state.candles.get(timeframe, [])) + 1)
 
                     if state.broker_candle_feed:
                         # Vantage native XAUUSD broker OHLC remains authoritative.
