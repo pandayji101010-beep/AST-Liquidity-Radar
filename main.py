@@ -728,7 +728,11 @@ async def bootstrap_market_data() -> None:
                 # Use official Binance USD-M archive rather than the geo-restricted
                 # Futures REST host. Archive rows are real futures klines.
                 loaded = await load_btc_um_history(http_client, state.symbol, HISTORY_BARS)
-                state.data_source = loaded["source"]
+                state.data_source = loaded.get("source") or state.data_source or (
+                "Binance Futures TradFi Perpetual XAUUSDT continuousKlines"
+                if source_is_binance
+                else "Yahoo Finance COMEX Gold Futures (GC=F); reference only, not Vantage XAUUSD CFD"
+            )
             else:
                 # Binance TradFi Perpetual XAUUSDT is the primary Gold reference.
                 # Yahoo GC=F remains a labelled fallback if the Binance REST host
@@ -960,8 +964,14 @@ async def gold_tradfi_stream_worker() -> None:
                     timeframe = str(k.get("i") or "")
                     price = safe_float(k.get("c"))
                     event_time = int(data.get("E") or now_ms())
+                    first_binance_packet = not state.binance_tradfi_stream_active
                     state.binance_tradfi_last_update_ts = now_ms()
                     state.last_message_ts = now_ms()
+                    if first_binance_packet:
+                        log.info(
+                            "Received Binance XAUUSDT TradFi continuous-kline packet: timeframe=%s close=%s contractType=%s",
+                            timeframe, price, contract_type,
+                        )
 
                     if state.broker_candle_feed:
                         # Vantage native XAUUSD broker OHLC remains authoritative.
