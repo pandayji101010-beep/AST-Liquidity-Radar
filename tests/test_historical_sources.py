@@ -1,12 +1,13 @@
 import time
 import unittest
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from historical_sources import (
     _normalise_yahoo_chart,
     _resample_from_source,
     load_btc_um_history,
+    load_gold_live,
     load_binance_tradfi_gold_history,
     _normalise_binance_continuous_klines,
     resample_from_1m,
@@ -14,6 +15,16 @@ from historical_sources import (
 
 
 class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_yahoo_gold_live_fallback_returns_a_source_label(self):
+        bars = [
+            {"t": 1_700_000_000_000, "o": 2350.0, "h": 2352.0, "l": 2349.0, "c": 2351.0, "v": 10.0},
+            {"t": 1_700_000_060_000, "o": 2351.0, "h": 2353.0, "l": 2350.0, "c": 2352.0, "v": 11.0},
+        ]
+        with patch("historical_sources._gold_chart", new=AsyncMock(side_effect=[bars, bars])):
+            result = await load_gold_live(object())
+        self.assertIn("Yahoo Finance COMEX Gold Futures (GC=F)", result["source"])
+        self.assertEqual(result["latest"]["c"], 2352.0)
+
     def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
         now_ms = int(time.time() * 1000)
         closed_open = ((now_ms - 180_000) // 60_000) * 60_000
