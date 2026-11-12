@@ -20,13 +20,13 @@ class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
              "l": 2349.0, "c": 2351.0, "v": 1.0}
             for index in range(26 * 24 * 60)
         ]
+        archive_candles = {"1m": minute_rows[-25_000:]}
+        for timeframe in ("5m", "15m", "30m", "1h", "4h", "1d"):
+            archive_candles[timeframe] = resample_from_1m(minute_rows, timeframe, 25_000)
         archive_payload = {
-            "candles": {
-                "1m": minute_rows[-25_000:],
-                "5m": [], "15m": [], "30m": [], "1h": [], "4h": [], "1d": [],
-            },
+            "candles": archive_candles,
             "source": "Binance Futures TradFi Perpetual XAUUSDT public archive",
-            "bars": {"1m": min(len(minute_rows), 25_000)},
+            "bars": {tf: len(rows) for tf, rows in archive_candles.items()},
         }
 
         async def no_rest(*args, **kwargs):
@@ -40,6 +40,7 @@ class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
         archive.assert_awaited_once()
         self.assertIn("Binance Futures TradFi Perpetual XAUUSDT public archive", result["source"])
         self.assertEqual(result["bars"]["1m"], 25_000)
+        self.assertGreaterEqual(result["bars"]["1d"], 25)
 
     def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
         now_ms = int(time.time() * 1000)
