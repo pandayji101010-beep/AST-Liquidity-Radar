@@ -13,11 +13,11 @@ from historical_sources import (
 )
 
 
-class HistoricalSourceTests(unittest.TestCase):
+class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
     def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
         now_ms = int(time.time() * 1000)
         closed_open = ((now_ms - 180_000) // 60_000) * 60_000
-        active_open = closed_open + 60_000
+        active_open = (now_ms // 60_000) * 60_000
         payload = [
             [closed_open, "2350.0", "2352.0", "2349.0", "2351.5", "12.5",
              closed_open + 59_999, "29393.75", 42, "6.0", "14095.0", "0"],
@@ -54,17 +54,20 @@ class HistoricalSourceTests(unittest.TestCase):
                     "30m": 1_800_000, "1h": 3_600_000,
                     "4h": 14_400_000, "1d": 86_400_000,
                 }[timeframe]
-                opened = ((now_ms - duration * 3) // duration) * duration
-                payload = [[
-                    opened, "2350.0", "2352.0", "2349.0", "2351.5", "12.5",
-                    opened + duration - 1, "29393.75", 42, "6.0", "14095.0", "0",
-                ]]
+                opened = ((now_ms - duration * 40) // duration) * duration
+                payload = [
+                    [
+                        opened + index * duration, "2350.0", "2352.0", "2349.0", "2351.5", "12.5",
+                        opened + (index + 1) * duration - 1, "29393.75", 42, "6.0", "14095.0", "0",
+                    ]
+                    for index in range(30)
+                ]
                 return FakeResponse(payload)
 
         result = await load_binance_tradfi_gold_history(FakeClient(), limit=10_000)
         self.assertEqual(set(result["candles"]), {"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
         self.assertIn("Binance Futures TradFi Perpetual XAUUSDT", result["source"])
-        self.assertEqual(result["bars"]["1m"], 1)
+        self.assertEqual(result["bars"]["1m"], 30)
         self.assertTrue(calls)
         self.assertTrue(all(params["pair"] == "XAUUSDT" for _url, params in calls))
         self.assertTrue(all(params["contractType"] == "TRADIFI_PERPETUAL" for _url, params in calls))
