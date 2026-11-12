@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import websockets
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -734,11 +734,17 @@ async def bootstrap_market_data() -> None:
             state.connection_error = None
             for tf in TIMEFRAMES:
                 rows = loaded["candles"].get(tf, [])
+                # History first, then live bars so a just-closed websocket candle
+                # wins if its timestamp overlaps the archive snapshot.
+                merged = {int(item["t"]): item for item in rows}
+                for item in state.candles[tf]:
+                    merged[int(item["t"])] = item
+                ordered = [merged[stamp] for stamp in sorted(merged)][-HISTORY_BARS:]
                 state.candles[tf].clear()
-                state.candles[tf].extend(rows[-HISTORY_BARS:])
+                state.candles[tf].extend(ordered)
                 state.latest_analysis[tf] = await asyncio.to_thread(state.analyse, tf)
                 log.info(
-                    "Loaded %s Binance historical candles for %s %s from %s",
+                    "Loaded %s Binance historical/live candles for %s %s from %s",
                     len(state.candles[tf]), key, tf, state.data_source,
                 )
 
@@ -1243,15 +1249,7 @@ def record_vantage_candles(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def initialize_market_data_and_workers() -> None:
-    """Load historical archives after the web server is already accepting requests."""
-    try:
-        await bootstrap_market_data()
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # Keep the dashboard API available when an upstream history source fails.
-        log.exception("Historical bootstrap failed; starting live market workers anyway")
-
+    """Connect live market streams immediately, then backfill history in parallel."""
     background_tasks.extend([
         asyncio.create_task(market_stream_worker(), name="binance-market"),
         asyncio.create_task(gold_tradfi_stream_worker(), name="binance-gold-tradfi"),
@@ -1259,7 +1257,21 @@ async def initialize_market_data_and_workers() -> None:
         asyncio.create_task(rest_metrics_worker(), name="binance-rest-metrics"),
         asyncio.create_task(gold_market_worker(), name="gold-reference-feed"),
     ])
-    log.info("AST Liquidity Radar market workers started")
+    log.info("AST Liquidity Radar live market workers started; Binance history backfill running in parallel")
+
+    try:
+        await bootstrap_market_data()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("Historical bootstrap failed; live market streams remain active")
+
+    # Strategy replay runs off the request path. The dashboard API returns the
+    # latest completed cache immediately, even while a 25k-bar replay is warming.
+    background_tasks.append(
+        asyncio.create_task(campaign_snapshot_worker(), name="campaign-snapshot-cache")
+    )
+
 
 
 @app.on_event("startup")
@@ -1368,29 +1380,24 @@ _campaign_scanner_cache_at = 0.0
 _campaign_scanner_cache_lock: asyncio.Lock | None = None
 
 
-@app.get("/api/campaign")
-async def campaign_scanner() -> dict[str, Any]:
-    """Return point-in-time multi-timeframe analysis and simulated 1m campaigns."""
+async def refresh_campaign_scanner_cache() -> dict[str, Any]:
+    """Build point-in-time strategy snapshots in a background worker."""
     global _campaign_scanner_cache, _campaign_scanner_cache_at, _campaign_scanner_cache_lock
-    loop = asyncio.get_running_loop()
-    if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 2.0:
-        return _campaign_scanner_cache
-
     if _campaign_scanner_cache_lock is None:
         _campaign_scanner_cache_lock = asyncio.Lock()
 
     async with _campaign_scanner_cache_lock:
         loop = asyncio.get_running_loop()
-        if _campaign_scanner_cache is not None and loop.time() - _campaign_scanner_cache_at < 2.0:
-            return _campaign_scanner_cache
-
         assets: list[dict[str, Any]] = []
-        for state in states.values():
-            result = await asyncio.to_thread(
+        results = await asyncio.gather(*(
+            asyncio.to_thread(
                 state.campaign_engine.snapshot,
                 state.candles,
                 state.key,
             )
+            for state in states.values()
+        ))
+        for state, result in zip(states.values(), results):
             result["data_source"] = state.data_source or "Source not reported"
             result["broker_candle_feed"] = bool(state.broker_candle_feed)
             result["broker_candle_time"] = state.broker_candle_ts
@@ -1405,6 +1412,65 @@ async def campaign_scanner() -> dict[str, Any]:
         _campaign_scanner_cache_at = loop.time()
         return _campaign_scanner_cache
 
+
+async def campaign_snapshot_worker() -> None:
+    """Keep the heavy replay warm away from browser/API request threads."""
+    while True:
+        try:
+            await refresh_campaign_scanner_cache()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Campaign snapshot cache refresh failed")
+        await asyncio.sleep(1.0)
+
+
+@app.get("/api/campaign")
+async def campaign_scanner() -> dict[str, Any]:
+    """Return the latest cached campaign state without waiting for a 25k-bar replay."""
+    if _campaign_scanner_cache is not None:
+        return _campaign_scanner_cache
+    return {
+        "time": now_ms(),
+        "strategy_name": "AST Multi-Timeframe Pyramiding Campaign",
+        "assets": [],
+        "status": "WARMING UP",
+    }
+
+
+@app.websocket("/ws/prices")
+async def live_price_stream(websocket: WebSocket) -> None:
+    """Push tiny in-memory BTC/Gold quote snapshots to browsers at up to 10 Hz."""
+    await websocket.accept()
+    try:
+        while True:
+            stamp = now_ms()
+            payload = {
+                "type": "prices",
+                "server_time": stamp,
+                "assets": {
+                    key: {
+                        "price": state.mark_price,
+                        "mark_ts": state.mark_ts,
+                        "source": (
+                            "VANTAGE LIVE" if key == "GOLD" and state.broker_candle_feed
+                            else "XAUUSDT LIVE" if key == "GOLD"
+                            else "BINANCE LIVE"
+                        ),
+                        "fresh": bool(state.mark_ts and stamp - state.mark_ts <= 15_000),
+                    }
+                    for key, state in states.items()
+                },
+            }
+            await websocket.send_json(payload)
+            await asyncio.sleep(0.1)
+    except WebSocketDisconnect:
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.debug("Live price websocket closed", exc_info=True)
+        return
 
 
 
