@@ -127,7 +127,7 @@ class ASTFourEngineOrchestrator:
                         available = [x for x in available if int(x["_close_t"]) <= asof]
                     else:
                         available = [x for x in available if int(x["t"]) + FRAME_MS[tf] <= asof]
-                    cached_frame[tf] = self.mbie.analyze_timeframe(available, tf)
+                    cached_frame[tf] = self.mbie.analyze_timeframe(available, tf, asset=asset)
                     cached_count[tf] = count
 
             higher = {
@@ -135,7 +135,7 @@ class ASTFourEngineOrchestrator:
                 for tf in HTF_ORDER
             }
             micro_bars = one[max(0, index - 320):index + 1]
-            micro = self.mbie.analyze_timeframe(micro_bars, "1m", include_auction=False)
+            micro = self.mbie.analyze_timeframe(micro_bars, "1m", include_auction=False, asset=asset)
             higher_with_execution = {**higher, "1m": micro}
             latest_mtf = self.mtf_engine.combine(higher_with_execution)
             latest_micro = micro
@@ -170,11 +170,11 @@ class ASTFourEngineOrchestrator:
                 available = [x for x in available if int(x["_close_t"]) <= latest_asof]
             else:
                 available = [x for x in available if int(x["t"]) + FRAME_MS[tf] <= latest_asof]
-            final_frames[tf] = self.mbie.analyze_timeframe(available, tf)
+            final_frames[tf] = self.mbie.analyze_timeframe(available, tf, asset=asset)
 
         higher = {tf: final_frames.get(tf, {"ready": False, "side": None, "market_regime": "WARMING UP"}) for tf in HTF_ORDER}
         final_micro_bars = one[-min(len(one), 320):]
-        final_micro = self.mbie.analyze_timeframe(final_micro_bars, "1m")
+        final_micro = self.mbie.analyze_timeframe(final_micro_bars, "1m", asset=asset)
         alignment = self.mtf_engine.combine({**higher, "1m": final_micro})
         market_summary = self.mbie.summarize(higher, final_micro, alignment) if final_micro.get("ready") else latest_mbie
         campaign_state = self.campaign_engine.snapshot()

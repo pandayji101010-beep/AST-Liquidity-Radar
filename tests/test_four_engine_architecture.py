@@ -33,6 +33,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertIn(frame["market_regime"], ("TRENDING", "RANGING", "TREND TRANSITION", "DEVELOPING"))
         summary = mbie.summarize({}, frame, {"status": "WAITING", "side": None, "candidate_side": None})
         self.assertIn("market_context_score", summary)
+        self.assertIn("scalping_liquidity", summary)
         self.assertIn("data_coverage_pct", summary)
         self.assertEqual(summary["order_flow"]["status"], "UNAVAILABLE")
         self.assertEqual(summary["news_risk"]["status"], "UNAVAILABLE")
@@ -180,6 +181,62 @@ class FourEngineArchitectureTests(unittest.TestCase):
             "prior_low": 95.0, "prior_low_time": t0,
         })
         self.assertEqual(next_pool["buy_side"]["price"], 112.0)
+
+    def test_scalping_liquidity_finds_micro_pools_inside_the_100_to_500_pip_band(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
+        bars = [
+            {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
+            for i in range(len(highs))
+        ]
+        candidates = mbie._scalping_liquidity_candidates(
+            bars, "1m", {"atr": 20.0}, 1000.0, pip_size=1.0,
+        )
+        self.assertEqual(candidates["BUY_SIDE"][0]["price"], 1300.0)
+        self.assertEqual(candidates["SELL_SIDE"][0]["price"], 700.0)
+        self.assertEqual(candidates["BUY_SIDE"][0]["distance_pips"], 300.0)
+        self.assertEqual(candidates["SELL_SIDE"][0]["distance_pips"], 300.0)
+        self.assertEqual(mbie._pip_size_for_asset("BTC"), 1.0)
+        self.assertEqual(mbie._pip_size_for_asset("GOLD"), 0.01)
+
+    def test_scalping_pool_has_an_independent_lock_and_clears_on_its_own_timeframe_sweep(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 700, 740, 780, 820, 860, 900, 910]
+        bars = [
+            {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
+            for i in range(len(highs))
+        ]
+        # Seed the swing layer separately; a scalp sweep must not consume it.
+        swing = mbie._update_persistent_liquidity(bars, "5m", {
+            "prior_high": 1600.0, "prior_high_time": t0 - 60_000,
+            "prior_low": 400.0, "prior_low_time": t0 - 60_000,
+        })
+        self.assertEqual(swing["buy_side"]["price"], 1600.0)
+        builder = lambda rows, frame, close: mbie._scalping_liquidity_candidates(
+            rows, "5m", frame, close, pip_size=1.0,
+        )
+        seeded = mbie._update_persistent_liquidity(
+            bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
+        )
+        self.assertEqual(seeded["buy_side"]["price"], 1300.0)
+        self.assertEqual(seeded["sell_side"]["price"], 700.0)
+        self.assertIn("5m:SCALP", mbie._liquidity_trackers)
+        self.assertIn("5m", mbie._liquidity_trackers)
+
+        bars.append({
+            "t": t0 + len(bars) * 60_000, "o": 1280, "h": 1310,
+            "l": 990, "c": 1290, "v": 100,
+        })
+        swept = mbie._update_persistent_liquidity(
+            bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
+        )
+        self.assertIsNone(swept["buy_side"])
+        self.assertEqual(swept["last_cleared"]["buy_side"]["event"], "SWEPT")
+        self.assertIsNotNone(mbie._liquidity_trackers["5m"]["active"]["BUY_SIDE"])
 
     def test_persistent_liquidity_state_is_separate_for_each_timeframe(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()

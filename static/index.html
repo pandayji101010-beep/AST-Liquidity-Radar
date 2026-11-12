@@ -495,6 +495,7 @@ body{
 .liquidity-side.sell .name,.liquidity-side.sell strong{color:var(--red)}
 .liquidity-empty{font-size:11px;color:var(--muted);padding:7px 0}
 .liquidity-cleared{font-size:9px;color:var(--muted);line-height:1.4;margin-top:7px;padding-top:6px;border-top:1px solid #26384b}
+.liquidity-layer-label{font-size:9px;font-weight:900;letter-spacing:.07em;color:#9fb4c9;margin:8px 0 3px}.liquidity-layer-label.scalp{color:#e8b45d}.liquidity-side.scalp{border:1px solid #514128;background:#171c25}.liquidity-cleared.scalp-clear{border-top-style:dashed}
 @media(max-width:850px){.liquidity-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:420px){.liquidity-grid{grid-template-columns:1fr}.liquidity-tf{padding:9px}}
 @media(max-width:800px){.mbie-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mbie-scenarios{grid-template-columns:1fr}}
@@ -671,34 +672,51 @@ function renderLiquidityLevels(asset,digits){
   const frameRows=order.map(tf=>{
     const frame=frames[tf]||{};
     const pools=frame.persistent_liquidity||{};
+    const scalp=frame.scalping_liquidity||{};
     const buy=pools.buy_side||null;
     const sell=pools.sell_side||null;
     const ref=Number(frame.close);
-    const sideHtml=(level,side)=>{
-      if(!level) return '<div class="liquidity-side '+side+'"><span class="name">'+(side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓')+'</span><strong>—</strong><small>Waiting for untouched liquidity</small></div>';
+    const sideHtml=(level,side,layer)=>{
+      const isScalp=layer==='scalp';
+      const sideLabel=side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓';
+      if(!level){
+        const waitText=isScalp?'No untouched pool in 100–500 pip band':'Waiting for untouched swing liquidity';
+        return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>—</strong><small>'+waitText+'</small></div>';
+      }
       const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
       const distPct=level.distance_pct!==null&&level.distance_pct!==undefined?Number(level.distance_pct):ref>0?distance/ref*100:0;
-      return '<div class="liquidity-side '+side+'"><span class="name">'+(side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓')+'</span><strong>'+n(level.price,digits)+'</strong><small>'+n(distance,digits)+' away · '+n(distPct,3)+'% · '+(level.label||'ACTIVE POOL')+'</small></div>';
+      const detail=isScalp
+        ? n(level.distance_pips,1)+' pips away · '+(level.label||'MICRO POOL')
+        : n(distance,digits)+' away · '+n(distPct,3)+'% · '+(level.label||'ACTIVE SWING POOL');
+      return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>'+n(level.price,digits)+'</strong><small>'+detail+'</small></div>';
     };
     const cleared=pools.last_cleared||{};
+    const scalpCleared=scalp.last_cleared||{};
     const clearText=[
       cleared.buy_side?'Buy '+cleared.buy_side.event+' @ '+n(cleared.buy_side.price,digits):null,
       cleared.sell_side?'Sell '+cleared.sell_side.event+' @ '+n(cleared.sell_side.price,digits):null
     ].filter(Boolean).join(' · ');
+    const scalpClearText=[
+      scalpCleared.buy_side?'Buy '+scalpCleared.buy_side.event+' @ '+n(scalpCleared.buy_side.price,digits):null,
+      scalpCleared.sell_side?'Sell '+scalpCleared.sell_side.event+' @ '+n(scalpCleared.sell_side.price,digits):null
+    ].filter(Boolean).join(' · ');
     const timeframeLabel={"1M":"1MO","1w":"1W","1d":"1D","4h":"4H","1h":"1H","30m":"30M","15m":"15M","5m":"5M","1m":"1MIN"}[tf]||tf.toUpperCase();
     return '<article class="liquidity-tf">'
-      +'<div class="liquidity-tf-head"><b>'+timeframeLabel+'</b><span>'+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+'</span></div>'
-      +sideHtml(buy,'buy')+sideHtml(sell,'sell')
-      +'<div class="liquidity-cleared">'+(clearText?'Last cleared · '+clearText:'Last cleared · None recorded')+'</div>'
+      +'<div class="liquidity-tf-head"><b>'+timeframeLabel+'</b><span>SWING '+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+' · SCALP '+(scalp.status||'SCANNING')+'</span></div>'
+      +'<div class="liquidity-layer-label">SWING LIQUIDITY · STRUCTURE POOLS</div>'
+      +sideHtml(buy,'buy','swing')+sideHtml(sell,'sell','swing')
+      +'<div class="liquidity-cleared">'+(clearText?'Swing cleared · '+clearText:'Swing cleared · None recorded')+'</div>'
+      +'<div class="liquidity-layer-label scalp">SCALPING LIQUIDITY · 100–500 PIPS</div>'
+      +sideHtml(scalp.buy_side||null,'buy','scalp')+sideHtml(scalp.sell_side||null,'sell','scalp')
+      +'<div class="liquidity-cleared scalp-clear">'+(scalpClearText?'Scalp cleared · '+scalpClearText:'Scalp cleared · None recorded')+'</div>'
       +'</article>';
   }).join('');
   return '<section class="liquidity-panel">'
-    +'<div class="liquidity-panel-head"><div class="liquidity-panel-title">ACTIVE LIQUIDITY · ALL TIMEFRAMES</div>'+tag('LOCKED UNTIL SWEPT / BROKEN','neutral')+'</div>'
-    +'<div class="liquidity-panel-note">Each timeframe manages its own levels using its completed candles. A level stays fixed while untouched; after a sweep or break, the next untouched level is selected on the following candle of that same timeframe.</div>'
+    +'<div class="liquidity-panel-head"><div class="liquidity-panel-title">ACTIVE LIQUIDITY · ALL TIMEFRAMES</div>'+tag('SWING + SCALPING · SEPARATE LOCKS','neutral')+'</div>'
+    +'<div class="liquidity-panel-note">Swing pools remain unchanged. Scalp pools seed from confirmed micro highs/lows 100–500 pips away (BTC: $1/pip; GOLD: $0.01/pip), then stay locked until that same timeframe sweeps or breaks them. A replacement activates only on the next completed candle.</div>'
     +'<div class="liquidity-grid">'+frameRows+'</div>'
     +'</section>';
 }
-
 function renderCampaigns(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
