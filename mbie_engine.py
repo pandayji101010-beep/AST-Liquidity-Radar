@@ -663,6 +663,7 @@ class ASTMarketBehaviourIntelligenceEngine:
             "structure_event": micro.get("structure_event") or ("BOS" if micro.get("bos_side") else None),
             "liquidity": micro.get("liquidity", {}),
             "persistent_liquidity": micro.get("persistent_liquidity", {}),
+            "scalping_liquidity": micro.get("scalping_liquidity", {}),
             "nearest_buy_side_liquidity": nearest_buy,
             "nearest_sell_side_liquidity": nearest_sell,
             "active_zones": micro.get("zones", {}),
