@@ -25,8 +25,6 @@ from historical_sources import (
     load_btc_um_history,
     load_binance_tradfi_gold_history,
     load_binance_tradfi_gold_live,
-    load_gold_history,
-    load_gold_live,
 )
 from ast_campaign_orchestrator import ASTFourEngineOrchestrator
 
@@ -719,51 +717,47 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
 
 
 async def bootstrap_market_data() -> None:
-    """Load candles from venue-appropriate public archives before live streams start."""
+    """Load BTC and Gold history exclusively from Binance public market data."""
     assert http_client is not None
 
     for key, state in states.items():
         try:
             if key == "BTC":
-                # Use official Binance USD-M archive rather than the geo-restricted
-                # Futures REST host. Archive rows are real futures klines.
                 loaded = await load_btc_um_history(http_client, state.symbol, HISTORY_BARS)
-                state.data_source = loaded.get("source") or state.data_source or (
-                "Binance Futures TradFi Perpetual XAUUSDT continuousKlines"
-                if source_is_binance
-                else "Yahoo Finance COMEX Gold Futures (GC=F); reference only, not Vantage XAUUSD CFD"
-            )
             else:
-                # Binance TradFi Perpetual XAUUSDT is the primary Gold reference.
-                # Yahoo GC=F remains a labelled fallback if the Binance REST host
-                # is unavailable from this deployment region.
-                try:
-                    loaded = await load_binance_tradfi_gold_history(http_client, HISTORY_BARS)
-                except Exception as binance_exc:
-                    log.warning("Binance TradFi GOLD bootstrap unavailable; using GC=F reference fallback: %s", binance_exc)
-                    loaded = await load_gold_history(http_client, HISTORY_BARS)
-                state.data_source = loaded["source"]
-                state.connection_error = None
+                loaded = await load_binance_tradfi_gold_history(http_client, HISTORY_BARS)
 
+            state.data_source = loaded.get("source") or (
+                "Binance USD-M BTCUSDT public history" if key == "BTC"
+                else "Binance Futures TradFi Perpetual XAUUSDT history"
+            )
+            state.connection_error = None
             for tf in TIMEFRAMES:
                 rows = loaded["candles"].get(tf, [])
                 state.candles[tf].clear()
                 state.candles[tf].extend(rows[-HISTORY_BARS:])
                 state.latest_analysis[tf] = await asyncio.to_thread(state.analyse, tf)
-                log.info("Loaded %s historical candles for %s %s from %s",
-                         len(state.candles[tf]), key, tf, state.data_source)
+                log.info(
+                    "Loaded %s Binance historical candles for %s %s from %s",
+                    len(state.candles[tf]), key, tf, state.data_source,
+                )
 
             one_minute = list(state.candles.get("1m", []))
             if one_minute:
                 latest = one_minute[-1]
                 state.mark_price = float(latest["c"])
-                state.index_price = state.mark_price
+                state.index_price = state.mark_price if key == "BTC" else None
                 state.mark_ts = int(latest["t"]) + 60_000
                 state.exchange_prices.append((state.mark_ts, state.mark_price))
 
         except Exception as exc:
-            state.connection_error = f"Historical data load failed: {str(exc)[:160]}"
-            log.exception("Historical data bootstrap failed for %s", key)
+            state.connection_error = f"Binance historical data unavailable: {str(exc)[:160]}"
+            if key == "GOLD":
+                state.data_source = (
+                    "Binance Futures TradFi Perpetual XAUUSDT live stream; "
+                    "historical Binance archive unavailable"
+                )
+            log.exception("Binance historical bootstrap failed for %s", key)
 
     # Binance Futures open-interest history is only meaningful for BTCUSDT here.
     btc = states.get("BTC")
@@ -785,7 +779,7 @@ async def bootstrap_market_data() -> None:
 
 
 async def gold_market_worker() -> None:
-    """Refresh Gold with Binance TradFi data first; use GC=F only before Binance is available."""
+    """Refresh Gold only from Binance XAUUSDT TradFi Perpetual market data."""
     assert http_client is not None
     state = states["GOLD"]
     while True:
@@ -804,12 +798,7 @@ async def gold_market_worker() -> None:
                 await asyncio.sleep(10)
                 continue
 
-            source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
-            if source_is_binance:
-                # A stale Binance source must never be silently replaced with GC=F.
-                loaded = await load_binance_tradfi_gold_live(http_client)
-            else:
-                loaded = await load_gold_live(http_client)
+            loaded = await load_binance_tradfi_gold_live(http_client)
 
             # A WebSocket packet may have arrived while the REST request was in flight.
             if (
@@ -833,24 +822,18 @@ async def gold_market_worker() -> None:
 
             latest = loaded["latest"]
             state.mark_price = float(latest["c"])
-            state.index_price = None if source_is_binance else state.mark_price
+            state.index_price = None
             state.mark_ts = int(latest["t"]) + 60_000
             state.exchange_prices.append((state.mark_ts, state.mark_price))
             state.data_source = loaded["source"]
             state.connection_error = None
-            if source_is_binance:
-                state.binance_tradfi_last_update_ts = now_ms()
+            state.binance_tradfi_last_update_ts = now_ms()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or ""):
-                state.connection_error = f"Binance XAUUSDT TradFi feed stale; retaining last Binance candles: {str(exc)[:120]}"
-                log.warning("Binance TradFi GOLD refresh failed; keeping last Binance bars: %s", exc)
-            else:
-                state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
-                log.warning("Gold reference feed refresh failed: %s", exc)
+            state.connection_error = f"Binance XAUUSDT TradFi feed stale; retaining last Binance candles: {str(exc)[:120]}"
+            log.warning("Binance TradFi GOLD refresh failed; keeping last Binance bars: %s", exc)
         await asyncio.sleep(30)
-
 
 
 async def market_stream_worker() -> None:
@@ -985,13 +968,6 @@ async def gold_tradfi_stream_worker() -> None:
                         continue
 
                     if not state.binance_tradfi_stream_active:
-                        # Never mix Yahoo GC=F with XAUUSDT candles.
-                        source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
-                        if not source_is_binance:
-                            for candles in state.candles.values():
-                                candles.clear()
-                            state.latest_analysis.clear()
-                            state.exchange_prices.clear()
                         state.data_source = "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
 
                     state.binance_tradfi_stream_active = True
