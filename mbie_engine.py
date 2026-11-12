@@ -11,8 +11,8 @@ from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy as 
 class ASTMarketBehaviourIntelligenceEngine:
     """MBIE: market understanding only. It never creates or approves orders."""
 
-    SCALP_MIN_DISTANCE_PIPS = 90.0
-    SCALP_MAX_DISTANCE_PIPS: float | None = None
+    SCALP_MIN_DISTANCE_PIPS = 60.0
+    SCALP_MAX_DISTANCE_PIPS = 999.0
     SCALP_PIVOT_LOOKBACK = 48
 
     SCORE_WEIGHTS = {
@@ -82,8 +82,8 @@ class ASTMarketBehaviourIntelligenceEngine:
         base: dict[str, Any],
         close: float,
         pip_size: float,
-        min_pips: float = 90.0,
-        max_pips: float | None = None,
+        min_pips: float = 60.0,
+        max_pips: float | None = 999.0,
         excluded_prices: dict[str, list[float]] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """Find confirmed local highs/lows inside the scalp-distance band."""
@@ -546,7 +546,7 @@ class ASTMarketBehaviourIntelligenceEngine:
         scalping_liquidity = self._update_persistent_liquidity(
             clean, timeframe, base, candidate_builder=scalp_builder,
             state_key=f"{timeframe}:SCALP",
-            max_active_distance_pips=None,
+            max_active_distance_pips=self.SCALP_MAX_DISTANCE_PIPS,
             pip_size=pip_size,
         )
         scalping_liquidity["pip_size"] = pip_size
