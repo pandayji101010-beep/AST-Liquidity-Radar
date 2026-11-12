@@ -442,7 +442,15 @@ body{
 .campaign-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
 .campaign-asset-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .campaign-asset-name{font-size:15px;font-weight:900;letter-spacing:.07em}
-.campaign-price-line{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:7px;font-size:11px;color:var(--muted)}
+.campaign-price-line{display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-top:7px;font-size:11px;color:var(--muted)}
+.campaign-live-quote{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid #285442;background:#0b211b;border-radius:8px;color:#b6d9c9;font-variant-numeric:tabular-nums}
+.campaign-live-quote.reference{border-color:#67502d;background:#211a10;color:#ead3a8}
+.campaign-live-quote.waiting{border-color:#3b4c5d;background:#101d2b;color:#adbdcc}
+.campaign-live-quote b{font-size:14px;font-weight:900;color:#e8fff4}
+.campaign-live-quote.reference b{color:#ffe2ae}
+.campaign-live-dot{width:6px;height:6px;border-radius:50%;background:#49d49a;box-shadow:0 0 0 3px #49d49a22}
+.campaign-live-quote.reference .campaign-live-dot{background:#d8a64f;box-shadow:0 0 0 3px #d8a64f22}
+.campaign-live-quote.waiting .campaign-live-dot{background:#91a4b7;box-shadow:0 0 0 3px #91a4b722}
 .campaign-status-line{margin-top:11px;padding:10px 12px;border:1px solid #26384b;background:#0c1825;border-radius:10px;font-size:12px;line-height:1.5;color:#c1d0de}
 .campaign-position-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
 .campaign-position{border:1px solid #2b4055;background:#0c1825;border-radius:11px;padding:11px;min-width:0}
@@ -740,10 +748,20 @@ function renderCampaigns(payload){
     const statusKind=statusText.includes('READY')?'good':
       statusText.includes('ACTIVE')?'good':
       statusText.includes('WAITING')?'warn':'neutral';
-    const price=a.live_reference_price;
+    const livePrice=a.live_price??a.live_reference_price;
+    const liveStatus=a.live_price_status||'WAITING';
+    const liveAge=a.live_price_age_seconds;
+    const liveSymbol=a.asset==='BTC'?'BTCUSDT':(a.broker_candle_feed?'VANTAGE XAUUSD':'XAUUSDT');
+    const liveQuoteClass=liveStatus==='LIVE'?'':liveStatus==='REFERENCE'?'reference':'waiting';
+    const liveQuoteLabel=liveStatus==='LIVE'?'LIVE':liveStatus==='REFERENCE'?'REFERENCE':'WAITING';
     const goldBinanceSource=String(a.data_source||'').includes('Binance Futures TradFi Perpetual XAUUSDT');
+    const goldReferenceRebased=Boolean(a.gold_history_basis_adjusted)||String(a.data_source||'').includes('GC=F history rebased');
     const sourceNote=a.asset==='GOLD'&&!a.broker_candle_feed
-      ? (goldBinanceSource?'Binance XAUUSDT TradFi Perpetual candles are active; Vantage XAUUSD broker OHLC bridge is separate and not connected.':'Yahoo GC=F reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.')
+      ? (goldReferenceRebased
+        ? 'Live quote: Binance XAUUSDT TradFi Perpetual. Historical liquidity/structure uses GC=F reference candles shifted to the first Binance quote; warm-start proxy, not native XAUUSDT history. Vantage XAUUSD bridge is separate.'
+        : goldBinanceSource
+          ? 'Binance XAUUSDT TradFi Perpetual candles are active; Vantage XAUUSD broker OHLC bridge is separate and not connected.'
+          : 'Yahoo GC=F reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.')
       : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USDⓈ-M BTCUSDT candles.');
     let cards='';
 
@@ -793,7 +811,10 @@ function renderCampaigns(payload){
     const winText=performance.win_rate_pct===null||performance.win_rate_pct===undefined?'—':n(performance.win_rate_pct,1)+'%';
     const pfText=performance.profit_factor===null||performance.profit_factor===undefined?'—':n(performance.profit_factor,2);
     return '<section class="campaign-asset">'
-      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b>'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
+      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line">'
+      +'<span class="campaign-live-quote '+liveQuoteClass+'"><i class="campaign-live-dot"></i><small>'+liveQuoteLabel+' '+liveSymbol+'</small><b>'+n(livePrice,digits)+'</b>'+(liveAge===null||liveAge===undefined?'':'<small>'+n(liveAge,0)+'s</small>')+'</span>'
+      +'<span>1m candle close: <b>'+n(a.one_minute_close,digits)+'</b></span>'
+      +'<span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
       +renderMarketIntelligence(a.market_intelligence,digits)
       +renderLiquidityLevels(a,digits)
