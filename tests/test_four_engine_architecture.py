@@ -182,7 +182,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
         })
         self.assertEqual(next_pool["buy_side"]["price"], 112.0)
 
-    def test_scalping_liquidity_finds_micro_pools_inside_the_100_to_500_pip_band(self):
+    def test_scalping_liquidity_accepts_micro_pools_from_90_pips_with_no_upper_cap(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
         t0 = 1_700_000_000_000
         highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
@@ -200,6 +200,26 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertEqual(candidates["SELL_SIDE"][0]["distance_pips"], 300.0)
         self.assertEqual(mbie._pip_size_for_asset("BTC"), 1.0)
         self.assertEqual(mbie._pip_size_for_asset("GOLD"), 0.01)
+
+    def test_scalping_candidates_accept_levels_farther_than_500_pips(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        highs = [1110, 1120, 1700, 1250, 1200, 1150, 1100, 1050, 1040]
+        lows = [890, 880, 300, 740, 780, 820, 860, 900, 910]
+        bars = [
+            {"t": t0 + i * 60_000, "o": 1000, "h": highs[i], "l": lows[i], "c": 1000, "v": 100}
+            for i in range(len(highs))
+        ]
+        candidates = mbie._scalping_liquidity_candidates(
+            bars, "1m", {"atr": 20.0}, 1000.0,
+            pip_size=1.0, min_pips=90.0, max_pips=None,
+        )
+        self.assertEqual(candidates["BUY_SIDE"][0]["price"], 1700.0)
+        self.assertEqual(candidates["SELL_SIDE"][0]["price"], 300.0)
+        self.assertEqual(candidates["BUY_SIDE"][0]["distance_pips"], 700.0)
+        self.assertEqual(candidates["SELL_SIDE"][0]["distance_pips"], 700.0)
+        self.assertIsNone(mbie.SCALP_MAX_DISTANCE_PIPS)
+        self.assertEqual(mbie.SCALP_MIN_DISTANCE_PIPS, 90.0)
 
     def test_scalping_pool_has_an_independent_lock_and_clears_on_its_own_timeframe_sweep(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
@@ -254,7 +274,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
         self.assertTrue(all(item["price"] != 1300.0 for item in candidates["BUY_SIDE"]))
         self.assertTrue(all(item["price"] != 700.0 for item in candidates["SELL_SIDE"]))
 
-    def test_scalping_pool_expires_when_it_drifts_beyond_500_pips(self):
+    def test_scalping_pool_stays_locked_even_when_it_drifts_beyond_500_pips(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
         t0 = 1_700_000_000_000
         highs = [1110, 1120, 1300, 1250, 1200, 1150, 1100, 1050, 1040]
@@ -268,25 +288,22 @@ class FourEngineArchitectureTests(unittest.TestCase):
         )
         seeded = mbie._update_persistent_liquidity(
             bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
-            max_active_distance_pips=500, pip_size=1.0,
+            max_active_distance_pips=None, pip_size=1.0,
         )
         self.assertEqual(seeded["buy_side"]["price"], 1300.0)
 
-        # Price moves away without touching the buy-side pool: 510 pips away.
+        # Price moves away beyond 500 pips without touching the active buy-side pool.
         bars.append({
             "t": t0 + len(bars) * 60_000,
             "o": 800.0, "h": 850.0, "l": 770.0, "c": 790.0, "v": 100,
         })
-        expired = mbie._update_persistent_liquidity(
+        still_locked = mbie._update_persistent_liquidity(
             bars, "5m", {}, candidate_builder=builder, state_key="5m:SCALP",
-            max_active_distance_pips=500, pip_size=1.0,
+            max_active_distance_pips=None, pip_size=1.0,
         )
-        self.assertIsNone(expired["buy_side"])
-        self.assertEqual(
-            expired["last_cleared"]["buy_side"]["event"],
-            "EXPIRED_OUTSIDE_SCALP_WINDOW",
-        )
-        self.assertEqual(expired["last_cleared"]["buy_side"]["distance_pips"], 510.0)
+        self.assertEqual(still_locked["buy_side"]["price"], 1300.0)
+        self.assertEqual(still_locked["buy_side"]["distance_points"], 510.0)
+        self.assertIsNone(still_locked["last_cleared"]["buy_side"])
 
     def test_persistent_liquidity_state_is_separate_for_each_timeframe(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()
