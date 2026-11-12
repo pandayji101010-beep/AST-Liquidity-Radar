@@ -11,6 +11,10 @@ from institutional_campaign_strategy import ASTInstitutionalCampaignStrategy as 
 class ASTMarketBehaviourIntelligenceEngine:
     """MBIE: market understanding only. It never creates or approves orders."""
 
+    SCALP_MIN_DISTANCE_PIPS = 100.0
+    SCALP_MAX_DISTANCE_PIPS = 500.0
+    SCALP_PIVOT_LOOKBACK = 48
+
     SCORE_WEIGHTS = {
         "market_regime": 10, "htf_structure": 15, "liquidity": 15,
         "auction_profile": 10, "order_flow": 15, "supply_demand": 10,
@@ -67,6 +71,89 @@ class ASTMarketBehaviourIntelligenceEngine:
         }
 
     @staticmethod
+    def _pip_size_for_asset(asset: str | None) -> float:
+        """Dashboard pip convention: BTC = $1; GOLD/XAUUSD = $0.01."""
+        return 0.01 if str(asset or "BTC").upper() in ("GOLD", "XAUUSD", "GC=F") else 1.0
+
+    @staticmethod
+    def _scalping_liquidity_candidates(
+        bars: list[dict[str, Any]],
+        timeframe: str,
+        base: dict[str, Any],
+        close: float,
+        pip_size: float,
+        min_pips: float = 100.0,
+        max_pips: float = 500.0,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Find confirmed local highs/lows inside the scalp-distance band."""
+        found: dict[str, list[dict[str, Any]]] = {"BUY_SIDE": [], "SELL_SIDE": []}
+        if len(bars) < 5 or not math.isfinite(pip_size) or pip_size <= 0 or close <= 0:
+            return found
+
+        rows = bars[-64:]
+        pivots: dict[str, list[tuple[float, int]]] = {"BUY_SIDE": [], "SELL_SIDE": []}
+        start = max(1, len(rows) - ASTMarketBehaviourIntelligenceEngine.SCALP_PIVOT_LOOKBACK)
+        for i in range(start, len(rows) - 1):
+            high = float(rows[i]["h"])
+            low = float(rows[i]["l"])
+            if high > float(rows[i - 1]["h"]) and high >= float(rows[i + 1]["h"]):
+                pivots["BUY_SIDE"].append((high, int(rows[i]["t"])))
+            if low < float(rows[i - 1]["l"]) and low <= float(rows[i + 1]["l"]):
+                pivots["SELL_SIDE"].append((low, int(rows[i]["t"])))
+
+        atr = float(base.get("atr") or 0.0)
+        equal_tolerance = max(atr * 0.10, pip_size * 2.0, 1e-8)
+
+        def add(side: str, price: float, source_time: int, label: str) -> None:
+            if not math.isfinite(price) or source_time <= 0:
+                return
+            if side == "BUY_SIDE" and price <= close:
+                return
+            if side == "SELL_SIDE" and price >= close:
+                return
+            distance_points = price - close if side == "BUY_SIDE" else close - price
+            distance_pips = distance_points / pip_size
+            if distance_pips < min_pips or distance_pips > max_pips:
+                return
+            if any(abs(float(item["price"]) - price) <= pip_size * 0.25 for item in found[side]):
+                return
+            found[side].append({
+                "id": f"{timeframe}:SCALP:{side}:{source_time}:{price:.10f}",
+                "price": price,
+                "label": label,
+                "side": side,
+                "timeframe": timeframe,
+                "source_time": source_time,
+                "formed_at": source_time,
+                "status": "ACTIVE",
+                "distance_points": round(distance_points, 10),
+                "distance_pips": round(distance_pips, 1),
+            })
+
+        for side, label in (("BUY_SIDE", "MICRO EQUAL HIGH"), ("SELL_SIDE", "MICRO EQUAL LOW")):
+            side_pivots = pivots[side]
+            if len(side_pivots) >= 2:
+                first, second = side_pivots[-2], side_pivots[-1]
+                if abs(first[0] - second[0]) <= equal_tolerance:
+                    add(side, (first[0] + second[0]) / 2.0, max(first[1], second[1]), label)
+
+        for price, source_time in reversed(pivots["BUY_SIDE"]):
+            add("BUY_SIDE", price, source_time, "MICRO SWING HIGH")
+        for price, source_time in reversed(pivots["SELL_SIDE"]):
+            add("SELL_SIDE", price, source_time, "MICRO SWING LOW")
+
+        prior_window = rows[-9:-1]
+        if prior_window:
+            high_bar = max(prior_window, key=lambda item: float(item["h"]))
+            low_bar = min(prior_window, key=lambda item: float(item["l"]))
+            add("BUY_SIDE", float(high_bar["h"]), int(high_bar["t"]), "RECENT MICRO RANGE HIGH")
+            add("SELL_SIDE", float(low_bar["l"]), int(low_bar["t"]), "RECENT MICRO RANGE LOW")
+
+        found["BUY_SIDE"].sort(key=lambda item: item["price"])
+        found["SELL_SIDE"].sort(key=lambda item: item["price"], reverse=True)
+        return found
+
+    @staticmethod
     def _candidate_was_consumed(state: dict[str, Any], side: str, candidate: dict[str, Any], base: dict[str, Any]) -> bool:
         price = float(candidate["price"])
         tolerance = max(float(base.get("atr") or 0.0) * 0.05, abs(price) * 0.00001, 1e-8)
@@ -116,23 +203,35 @@ class ASTMarketBehaviourIntelligenceEngine:
         bars: list[dict[str, Any]],
         timeframe: str,
         base: dict[str, Any],
+        candidate_builder: Any = None,
+        state_key: str | None = None,
     ) -> dict[str, Any]:
         if not bars:
-            return {"timeframe": timeframe, "status": "WAITING FOR DATA", "buy_side": None, "sell_side": None, "last_cleared": {"buy_side": None, "sell_side": None}}
-        state = self._liquidity_trackers.setdefault(timeframe, {
+            return {
+                "timeframe": timeframe, "status": "WAITING FOR DATA",
+                "buy_side": None, "sell_side": None,
+                "last_cleared": {"buy_side": None, "sell_side": None},
+            }
+
+        tracker_key = state_key or timeframe
+        state = self._liquidity_trackers.setdefault(tracker_key, {
             "last_bar_time": None,
             "active": {"BUY_SIDE": None, "SELL_SIDE": None},
             "consumed_ids": set(),
             "consumed_levels": {"BUY_SIDE": [], "SELL_SIDE": []},
             "last_cleared": {"BUY_SIDE": None, "SELL_SIDE": None},
         })
+
+        def candidates_for(frame_bars, frame_base, frame_close):
+            if candidate_builder is not None:
+                return candidate_builder(frame_bars, frame_base, frame_close)
+            return self._liquidity_candidates(frame_base, timeframe, frame_close)
+
         last_time = int(bars[-1]["t"])
         close = float(bars[-1]["c"])
 
-        # First snapshot: recover the nearest currently untouched pool, and reject
-        # candidates that were already swept/broken after their source candle.
         if state["last_bar_time"] is None:
-            candidates = self._liquidity_candidates(base, timeframe, close)
+            candidates = candidates_for(bars, base, close)
             for side in ("BUY_SIDE", "SELL_SIDE"):
                 for candidate in candidates[side]:
                     crossed = None
@@ -148,8 +247,7 @@ class ASTMarketBehaviourIntelligenceEngine:
                         state["consumed_levels"][side].append({"price": candidate["price"], "time": clear_time})
                         state["last_cleared"][side] = {
                             "price": candidate["price"], "label": candidate["label"],
-                            "event": crossed, "time": clear_time,
-                            "timeframe": timeframe,
+                            "event": crossed, "time": clear_time, "timeframe": timeframe,
                         }
                         continue
                     state["active"][side] = candidate
@@ -157,15 +255,15 @@ class ASTMarketBehaviourIntelligenceEngine:
             state["last_bar_time"] = last_time
             return self._liquidity_snapshot(state, timeframe, close)
 
-        # Process each newly closed candle once. If a live candle stream skips
-        # more than one bar, rebuild each intermediate frame point-in-time.
         prior_time = int(state["last_bar_time"])
         unseen_indices = [i for i, candle in enumerate(bars) if int(candle["t"]) > prior_time]
         for new_index in unseen_indices:
             candle = bars[new_index]
             candle_time = int(candle["t"])
-            frame_base = base if new_index == len(bars) - 1 else Kernel._frame_snapshot(bars[:new_index + 1], timeframe)
+            frame_bars = bars[:new_index + 1]
+            frame_base = base if new_index == len(bars) - 1 else Kernel._frame_snapshot(frame_bars, timeframe)
             consumed_now: set[str] = set()
+
             for side in ("BUY_SIDE", "SELL_SIDE"):
                 active = state["active"].get(side)
                 if active:
@@ -175,33 +273,32 @@ class ASTMarketBehaviourIntelligenceEngine:
                         state["consumed_levels"][side].append({"price": active["price"], "time": candle_time})
                         state["last_cleared"][side] = {
                             "price": active["price"], "label": active["label"],
-                            "event": event, "time": candle_time,
-                            "timeframe": timeframe,
+                            "event": event, "time": candle_time, "timeframe": timeframe,
                         }
                         state["active"][side] = None
                         consumed_now.add(side)
+
             frame_close = float(candle["c"])
-            candidates = self._liquidity_candidates(frame_base, timeframe, frame_close)
+            candidates = candidates_for(frame_bars, frame_base, frame_close)
             for side in ("BUY_SIDE", "SELL_SIDE"):
                 if state["active"].get(side) is not None or side in consumed_now:
                     continue
                 for candidate in candidates[side]:
                     if candidate["id"] in state["consumed_ids"] or self._candidate_was_consumed(state, side, candidate, frame_base):
                         continue
-                    # Never activate a level that this same completed candle has touched.
                     event = self._liquidity_cross(candidate, candle)
                     if event:
                         state["consumed_ids"].add(candidate["id"])
                         state["consumed_levels"][side].append({"price": candidate["price"], "time": candle_time})
                         state["last_cleared"][side] = {
                             "price": candidate["price"], "label": candidate["label"],
-                            "event": event,
-                            "time": candle_time, "timeframe": timeframe,
+                            "event": event, "time": candle_time, "timeframe": timeframe,
                         }
                         continue
                     state["active"][side] = candidate
                     break
             state["last_bar_time"] = candle_time
+
         return self._liquidity_snapshot(state, timeframe, close)
 
     @staticmethod
@@ -314,7 +411,7 @@ class ASTMarketBehaviourIntelligenceEngine:
             "timezone": "UTC; daylight-saving exchange calendars unavailable",
         }
 
-    def analyze_timeframe(self, bars: list[dict[str, Any]], timeframe: str, include_auction: bool = True) -> dict[str, Any]:
+    def analyze_timeframe(self, bars: list[dict[str, Any]], timeframe: str, include_auction: bool = True, asset: str | None = None) -> dict[str, Any]:
         # The orchestrator supplies timestamp-sorted, validated bars; avoid re-sorting the 1m replay window.
         clean = list(bars or [])
         base = Kernel._frame_snapshot(clean, timeframe)
@@ -322,6 +419,12 @@ class ASTMarketBehaviourIntelligenceEngine:
             return {
                 **base, "market_regime": "WARMING UP", "market_regime_status": "UNAVAILABLE",
                 "liquidity": {"status": "UNAVAILABLE", "buy_side": [], "sell_side": []},
+                "persistent_liquidity": {"timeframe": timeframe, "status": "WARMING UP", "buy_side": None, "sell_side": None},
+                "scalping_liquidity": {
+                    "timeframe": timeframe, "status": "WARMING UP",
+                    "buy_side": None, "sell_side": None,
+                    "target_window_pips": {"min": self.SCALP_MIN_DISTANCE_PIPS, "max": self.SCALP_MAX_DISTANCE_PIPS},
+                },
                 "zones": {"status": "UNAVAILABLE", "supply": [], "demand": [], "fvg": None, "order_block": None},
                 "auction_profile": {"status": "UNAVAILABLE"},
                 "order_flow": {"status": "UNAVAILABLE", "reason": "No verified bid/ask historical feed in this replay."},
@@ -375,6 +478,26 @@ class ASTMarketBehaviourIntelligenceEngine:
         buy_side = sorted((x for x in levels if x["side"] == "BUY_SIDE" and x["price"] > price), key=lambda x: x["price"])
         sell_side = sorted((x for x in levels if x["side"] == "SELL_SIDE" and x["price"] < price), key=lambda x: x["price"], reverse=True)
         persistent_liquidity = self._update_persistent_liquidity(clean, timeframe, base)
+        pip_size = self._pip_size_for_asset(asset)
+        scalp_builder = lambda frame_bars, frame_base, frame_close: self._scalping_liquidity_candidates(
+            frame_bars, timeframe, frame_base, frame_close, pip_size,
+            self.SCALP_MIN_DISTANCE_PIPS, self.SCALP_MAX_DISTANCE_PIPS,
+        )
+        scalping_liquidity = self._update_persistent_liquidity(
+            clean, timeframe, base, candidate_builder=scalp_builder,
+            state_key=f"{timeframe}:SCALP",
+        )
+        scalping_liquidity["pip_size"] = pip_size
+        scalping_liquidity["pip_definition"] = "BTC: $1 per pip; GOLD/XAUUSD: $0.01 per pip"
+        scalping_liquidity["target_window_pips"] = {
+            "min": self.SCALP_MIN_DISTANCE_PIPS,
+            "max": self.SCALP_MAX_DISTANCE_PIPS,
+        }
+        for scalp_level in (scalping_liquidity.get("buy_side"), scalping_liquidity.get("sell_side")):
+            if scalp_level:
+                scalp_level["distance_pips"] = round(
+                    float(scalp_level.get("distance_points") or 0.0) / pip_size, 1
+                )
 
         fvg = base.get("fvg")
         order_block = base.get("order_block")
@@ -409,10 +532,12 @@ class ASTMarketBehaviourIntelligenceEngine:
             "momentum": {"status": "LIVE", "direction": momentum, "rsi": round(rsi, 2) if rsi is not None else None, "adx": round(adx, 2) if adx is not None else None, "roc_pct": round(roc, 3)},
             "volatility": {"status": "LIVE", "state": volatility, "atr": atr, "atr_pct": base.get("atr_pct"), "efficiency_ratio": round(efficiency, 3)},
             "persistent_liquidity": persistent_liquidity,
+            "scalping_liquidity": scalping_liquidity,
             "liquidity": {
                 "status": "CANDLE_DERIVED",
                 "buy_side": buy_side[:5], "sell_side": sell_side[:5],
                 "persistent": persistent_liquidity,
+                "scalping": scalping_liquidity,
                 "sweep": "LOWER_SWEEP" if base.get("lower_sweep") else "UPPER_SWEEP" if base.get("upper_sweep") else None,
                 "acceptance": "ACCEPTED_ABOVE" if prior_high is not None and price > prior_high else "ACCEPTED_BELOW" if prior_low is not None and price < prior_low else "INSIDE_OR_RECLAIMED",
             },
