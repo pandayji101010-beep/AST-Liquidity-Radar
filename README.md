@@ -137,3 +137,11 @@ The live Entry Engine now uses a balanced threshold profile to improve setup fre
 - Dashboard shows the active buy-side / sell-side price, its distance from that timeframe's last close, and the most recent cleared event. Higher-timeframe pools do not get cleared by a lower-timeframe wick.
 - These are OHLC-derived liquidity reference pools, not exchange-confirmed resting orders or a view of every trader's stop placement.
 
+### Separate scalping liquidity pools
+
+- Each timeframe also maintains an independent scalping layer beside the unchanged swing layer. Scalp candidates are confirmed 1-left / 1-right micro pivots, nearby equal micro highs/lows, and recent local range extremes.
+- A new scalp pool is seeded only when it is 100–500 pips from the current close. The selection band is an activation filter only: once active, the pool remains locked even if price later moves inside 100 pips or beyond 500 pips, until its own timeframe candle sweeps or closes through it.
+- BTC uses the dashboard convention of 1 pip = $1. GOLD/XAUUSD uses 1 pip = $0.01. The term pip is a display convention here; exchange/broker tick sizes and contract specifications can differ.
+- Buy-side and sell-side scalp pools have separate state from swing pools and from every other timeframe. A lower-timeframe wick cannot clear a higher-timeframe pool. The replacement is selected only on the next completed candle after a clear.
+- These remain OHLC-derived reference levels, not verified resting stop orders or guaranteed 100–500 pip trade targets. A level is a potential liquidity objective, not an entry signal or win-rate claim.
+
