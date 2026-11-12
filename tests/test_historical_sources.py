@@ -7,11 +7,72 @@ from historical_sources import (
     _normalise_yahoo_chart,
     _resample_from_source,
     load_btc_um_history,
+    load_binance_tradfi_gold_history,
+    _normalise_binance_continuous_klines,
     resample_from_1m,
 )
 
 
 class HistoricalSourceTests(unittest.TestCase):
+    def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
+        now_ms = int(time.time() * 1000)
+        closed_open = ((now_ms - 180_000) // 60_000) * 60_000
+        active_open = closed_open + 60_000
+        payload = [
+            [closed_open, "2350.0", "2352.0", "2349.0", "2351.5", "12.5",
+             closed_open + 59_999, "29393.75", 42, "6.0", "14095.0", "0"],
+            [active_open, "2351.5", "2353.0", "2351.0", "2352.5", "4.0",
+             active_open + 59_999, "9400.0", 8, "2.0", "4700.0", "0"],
+        ]
+        candles = _normalise_binance_continuous_klines(payload, "1m")
+        self.assertEqual(len(candles), 1)
+        self.assertEqual(candles[0]["t"], closed_open)
+        self.assertEqual(candles[0]["o"], 2350.0)
+        self.assertEqual(candles[0]["c"], 2351.5)
+        self.assertEqual(candles[0]["v"], 12.5)
+
+    async def test_binance_tradfi_gold_history_requests_xauusdt_continuous_contract(self):
+        now_ms = int(time.time() * 1000)
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class FakeClient:
+            async def get(self, url, params, timeout):
+                calls.append((url, dict(params)))
+                timeframe = params["interval"]
+                duration = {
+                    "1m": 60_000, "5m": 300_000, "15m": 900_000,
+                    "30m": 1_800_000, "1h": 3_600_000,
+                    "4h": 14_400_000, "1d": 86_400_000,
+                }[timeframe]
+                opened = ((now_ms - duration * 3) // duration) * duration
+                payload = [[
+                    opened, "2350.0", "2352.0", "2349.0", "2351.5", "12.5",
+                    opened + duration - 1, "29393.75", 42, "6.0", "14095.0", "0",
+                ]]
+                return FakeResponse(payload)
+
+        result = await load_binance_tradfi_gold_history(FakeClient(), limit=10_000)
+        self.assertEqual(set(result["candles"]), {"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
+        self.assertIn("Binance Futures TradFi Perpetual XAUUSDT", result["source"])
+        self.assertEqual(result["bars"]["1m"], 1)
+        self.assertTrue(calls)
+        self.assertTrue(all(params["pair"] == "XAUUSDT" for _url, params in calls))
+        self.assertTrue(all(params["contractType"] == "TRADIFI_PERPETUAL" for _url, params in calls))
+        self.assertEqual(
+            {params["interval"] for _url, params in calls},
+            {"1m", "5m", "15m", "30m", "1h", "4h", "1d"},
+        )
+
     def test_yahoo_payload_is_normalised_and_null_rows_skipped(self):
         payload = {
             "chart": {
