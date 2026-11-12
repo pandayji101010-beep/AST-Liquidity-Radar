@@ -851,85 +851,30 @@ async def gold_market_worker() -> None:
 
 async def market_stream_worker() -> None:
     streams: list[str] = ["!forceOrder@arr"]
-    btc_symbol = states["BTC"].symbol.lower()
-    streams.extend([
-        f"{btc_symbol}@aggTrade",
-        f"{btc_symbol}@markPrice@1s",
-        f"{btc_symbol}@kline_1m",
-        f"{btc_symbol}@kline_5m",
-        f"{btc_symbol}@kline_15m",
-        f"{btc_symbol}@kline_30m",
-        f"{btc_symbol}@kline_1h",
-        f"{btc_symbol}@kline_4h",
-        f"{btc_symbol}@kline_1d",
-    ])
-
-    # TradFi contracts use the continuous-kline namespace, not <symbol>@kline.
-    gold_pair = states["GOLD"].symbol.lower()
-    for timeframe in TIMEFRAMES:
-        streams.append(f"{gold_pair}_tradifi_perpetual@continuousKline_{timeframe}")
-
+    for symbol in (states["BTC"].symbol,):
+        s = symbol.lower()
+        streams.extend([
+            f"{s}@aggTrade",
+            f"{s}@markPrice@1s",
+            f"{s}@kline_1m",
+            f"{s}@kline_5m",
+            f"{s}@kline_15m",
+            f"{s}@kline_30m",
+            f"{s}@kline_1h",
+            f"{s}@kline_4h",
+            f"{s}@kline_1d",
+        ])
     url = MARKET_WS_BASE + "?streams=" + "/".join(streams)
 
     while True:
         try:
-            log.info("Connecting Binance market streams: BTC USD-M + GOLD TradFi XAUUSDT")
+            log.info("Connecting Binance USD-M BTC market streams")
             async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=8_000_000) as ws:
                 states["BTC"].connection_error = None
                 async for raw in ws:
                     packet = json.loads(raw)
                     data = packet.get("data", packet)
                     event = data.get("e")
-
-                    if event == "continuous_kline":
-                        pair = str(data.get("ps") or "").upper()
-                        contract_type = str(data.get("ct") or "").upper()
-                        if pair != states["GOLD"].symbol or contract_type != "TRADIFI_PERPETUAL":
-                            continue
-
-                        state = states["GOLD"]
-                        k = data.get("k") or {}
-                        timeframe = str(k.get("i") or "")
-                        price = safe_float(k.get("c"))
-                        event_time = int(data.get("E") or now_ms())
-                        state.binance_tradfi_last_update_ts = now_ms()
-                        state.last_message_ts = now_ms()
-
-                        if not state.broker_candle_feed:
-                            if not state.binance_tradfi_stream_active:
-                                # Never mix Yahoo GC=F history into the XAUUSDT series.
-                                source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
-                                if not source_is_binance:
-                                    for candles in state.candles.values():
-                                        candles.clear()
-                                    state.latest_analysis.clear()
-                                    state.exchange_prices.clear()
-                                state.data_source = "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
-                            state.binance_tradfi_stream_active = True
-                            if price is not None and price > 0:
-                                state.mark_price = price
-                                state.index_price = None
-                                state.mark_ts = event_time
-                                state.exchange_prices.append((event_time, price))
-                            state.connection_error = None
-
-                            if k.get("x") and timeframe in TIMEFRAMES:
-                                analysis = state.add_candle(timeframe, k)
-                                if analysis and analysis.get("ready"):
-                                    if analysis.get("upper_sweep"):
-                                        await publish_event(state.key, "UPPER_LIQUIDITY_SWEEP", "Price wicked above recent range high and closed back inside; breakout buyers may be trapped.", analysis.get("last_close"), timeframe)
-                                    if analysis.get("lower_sweep"):
-                                        await publish_event(state.key, "LOWER_LIQUIDITY_SWEEP", "Price wicked below recent range low and closed back inside; breakout sellers may be trapped.", analysis.get("last_close"), timeframe)
-                                    if analysis.get("range_break_down"):
-                                        await publish_event(state.key, "BEARISH_RANGE_EXPANSION", "Strong candle closed below the prior range; possible long-stop run / downside expansion.", analysis.get("last_close"), timeframe)
-                                    if analysis.get("range_break_up"):
-                                        await publish_event(state.key, "BULLISH_RANGE_EXPANSION", "Strong candle closed above the prior range; possible short-stop run / upside expansion.", analysis.get("last_close"), timeframe)
-                        else:
-                            # Vantage broker candles remain authoritative after bridge bootstrap.
-                            state.binance_tradfi_stream_active = True
-                            state.connection_error = None
-                        continue
-
                     if event == "markPriceUpdate":
                         symbol = data.get("s", "")
                         state = next((x for x in states.values() if x.symbol == symbol), None)
@@ -948,6 +893,7 @@ async def market_stream_worker() -> None:
                         if state:
                             price = safe_float(data.get("p"), 0.0) or 0.0
                             qty = safe_float(data.get("nq", data.get("q")), 0.0) or 0.0
+                            # m=true means buyer was maker, therefore seller was taker.
                             signed = -(price * qty) if bool(data.get("m")) else (price * qty)
                             state.add_trade(int(data.get("T", now_ms())), signed)
                             state.last_message_ts = now_ms()
@@ -980,12 +926,85 @@ async def market_stream_worker() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.exception("Binance market stream disconnected: %s", exc)
+            log.exception("BTC Binance market stream disconnected: %s", exc)
             states["BTC"].connection_error = str(exc)[:180]
-            states["GOLD"].binance_tradfi_stream_active = False
-            if not states["GOLD"].broker_candle_feed:
-                states["GOLD"].connection_error = str(exc)[:180]
             await asyncio.sleep(3)
+
+
+async def gold_tradfi_stream_worker() -> None:
+    """Subscribe separately to Binance XAUUSDT TradFi perpetual continuous klines."""
+    gold_pair = states["GOLD"].symbol.lower()
+    streams = [
+        f"{gold_pair}_tradifi_perpetual@continuousKline_{timeframe}"
+        for timeframe in TIMEFRAMES
+    ]
+    url = MARKET_WS_BASE + "?streams=" + "/".join(streams)
+    state = states["GOLD"]
+
+    while True:
+        try:
+            log.info("Connecting Binance Gold TradFi continuous kline streams: %s", ", ".join(TIMEFRAMES))
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=8_000_000) as ws:
+                async for raw in ws:
+                    packet = json.loads(raw)
+                    data = packet.get("data", packet)
+                    if data.get("e") != "continuous_kline":
+                        continue
+
+                    pair = str(data.get("ps") or "").upper()
+                    contract_type = str(data.get("ct") or "").upper()
+                    if pair != state.symbol or contract_type != "TRADIFI_PERPETUAL":
+                        continue
+
+                    k = data.get("k") or {}
+                    timeframe = str(k.get("i") or "")
+                    price = safe_float(k.get("c"))
+                    event_time = int(data.get("E") or now_ms())
+                    state.binance_tradfi_last_update_ts = now_ms()
+                    state.last_message_ts = now_ms()
+
+                    if state.broker_candle_feed:
+                        # Vantage native XAUUSD broker OHLC remains authoritative.
+                        state.binance_tradfi_stream_active = True
+                        continue
+
+                    if not state.binance_tradfi_stream_active:
+                        # Never mix Yahoo GC=F with XAUUSDT candles.
+                        source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
+                        if not source_is_binance:
+                            for candles in state.candles.values():
+                                candles.clear()
+                            state.latest_analysis.clear()
+                            state.exchange_prices.clear()
+                        state.data_source = "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
+
+                    state.binance_tradfi_stream_active = True
+                    state.connection_error = None
+                    if price is not None and price > 0:
+                        state.mark_price = price
+                        state.index_price = None
+                        state.mark_ts = event_time
+                        state.exchange_prices.append((event_time, price))
+
+                    if k.get("x") and timeframe in TIMEFRAMES:
+                        analysis = state.add_candle(timeframe, k)
+                        if analysis and analysis.get("ready"):
+                            if analysis.get("upper_sweep"):
+                                await publish_event(state.key, "UPPER_LIQUIDITY_SWEEP", "Price wicked above recent range high and closed back inside; breakout buyers may be trapped.", analysis.get("last_close"), timeframe)
+                            if analysis.get("lower_sweep"):
+                                await publish_event(state.key, "LOWER_LIQUIDITY_SWEEP", "Price wicked below recent range low and closed back inside; breakout sellers may be trapped.", analysis.get("last_close"), timeframe)
+                            if analysis.get("range_break_down"):
+                                await publish_event(state.key, "BEARISH_RANGE_EXPANSION", "Strong candle closed below the prior range; possible long-stop run / downside expansion.", analysis.get("last_close"), timeframe)
+                            if analysis.get("range_break_up"):
+                                await publish_event(state.key, "BULLISH_RANGE_EXPANSION", "Strong candle closed above the prior range; possible short-stop run / upside expansion.", analysis.get("last_close"), timeframe)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state.binance_tradfi_stream_active = False
+            if not state.broker_candle_feed:
+                state.connection_error = f"Binance XAUUSDT TradFi stream: {str(exc)[:140]}"
+            log.exception("Gold TradFi continuous-kline stream disconnected: %s", exc)
+            await asyncio.sleep(5)
 
 
 
@@ -1243,6 +1262,7 @@ async def initialize_market_data_and_workers() -> None:
 
     background_tasks.extend([
         asyncio.create_task(market_stream_worker(), name="binance-market"),
+        asyncio.create_task(gold_tradfi_stream_worker(), name="binance-gold-tradfi"),
         asyncio.create_task(depth_stream_worker(), name="binance-depth"),
         asyncio.create_task(rest_metrics_worker(), name="binance-rest-metrics"),
         asyncio.create_task(gold_market_worker(), name="gold-reference-feed"),
