@@ -78,6 +78,7 @@ class AssetState:
     funding_rate: float | None = None
     next_funding_time: int | None = None
     mark_ts: int | None = None
+    live_price_source: str | None = None
     open_interest: float | None = None
     oi_ts: int | None = None
     oi_history: deque[tuple[int, float]] = field(default_factory=lambda: deque(maxlen=500))
@@ -131,6 +132,9 @@ class AssetState:
     broker_candle_ts: int | None = None
     binance_tradfi_stream_active: bool = False
     binance_tradfi_last_update_ts: int | None = None
+    gold_history_reference_price: float | None = None
+    gold_history_basis_offset: float | None = None
+    gold_history_basis_applied: bool = False
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -316,6 +320,52 @@ class AssetState:
             "range_break_up": range_break_up,
             "candle_time": int(last["t"]),
         }
+
+
+
+def rebase_gold_reference_history(state: AssetState, live_price: float, timestamp_ms: int | None = None) -> float | None:
+    """Shift retained GC=F OHLC history onto the first live XAUUSDT price basis.
+
+    This is a transparent reference-history bridge, not native Binance history.
+    It preserves candle shapes/structure while preventing a raw price gap between
+    the COMEX reference series and the live TradFi perpetual quote.
+    """
+    if state.key != "GOLD" or state.broker_candle_feed or state.gold_history_basis_applied:
+        return state.gold_history_basis_offset
+
+    live = safe_float(live_price)
+    reference = safe_float(state.gold_history_reference_price)
+    if reference is None:
+        one_minute = state.candles.get("1m")
+        if one_minute:
+            reference = safe_float(one_minute[-1].get("c"))
+    if live is None or live <= 0 or reference is None or reference <= 0:
+        return None
+
+    offset = live - reference
+    for timeframe, candles in state.candles.items():
+        shifted_rows = []
+        for candle in list(candles):
+            shifted = dict(candle)
+            for field_name in ("o", "h", "l", "c"):
+                value = safe_float(shifted.get(field_name))
+                if value is not None:
+                    shifted[field_name] = value + offset
+            shifted_rows.append(shifted)
+        candles.clear()
+        candles.extend(shifted_rows)
+        if shifted_rows:
+            state.latest_analysis[timeframe] = state.analyse(timeframe)
+
+    state.gold_history_basis_offset = offset
+    state.gold_history_basis_applied = True
+    state.mark_price = live
+    state.index_price = None
+    state.mark_ts = int(timestamp_ms or now_ms())
+    state.live_price_source = "Binance XAUUSDT TradFi Perpetual live quote"
+    state.exchange_prices.clear()
+    state.exchange_prices.append((state.mark_ts, live))
+    return offset
 
 
 states: dict[str, AssetState] = {
@@ -757,8 +807,17 @@ async def bootstrap_market_data() -> None:
             if one_minute:
                 latest = one_minute[-1]
                 state.mark_price = float(latest["c"])
-                state.index_price = state.mark_price
+                state.index_price = state.mark_price if key == "BTC" else None
                 state.mark_ts = int(latest["t"]) + 60_000
+                state.live_price_source = (
+                    "Yahoo Finance GC=F historical reference (not live XAUUSD)"
+                    if key == "GOLD" and "Yahoo Finance COMEX Gold Futures (GC=F)" in (state.data_source or "")
+                    else "Binance historical candle close (live mark-price stream pending)"
+                )
+                if key == "GOLD" and "Yahoo Finance COMEX Gold Futures (GC=F)" in (state.data_source or ""):
+                    state.gold_history_reference_price = state.mark_price
+                    state.gold_history_basis_offset = None
+                    state.gold_history_basis_applied = False
                 state.exchange_prices.append((state.mark_ts, state.mark_price))
 
         except Exception as exc:
@@ -888,6 +947,7 @@ async def market_stream_worker() -> None:
                             state.funding_rate = safe_float(data.get("r"))
                             state.next_funding_time = int(data.get("T", 0)) or None
                             state.mark_ts = int(data.get("E", now_ms()))
+                            state.live_price_source = "Binance USD-M BTCUSDT mark-price stream"
                             if state.mark_price:
                                 state.exchange_prices.append((state.mark_ts, state.mark_price))
                                 state.last_message_ts = now_ms()
@@ -978,15 +1038,31 @@ async def gold_tradfi_stream_worker() -> None:
                         state.binance_tradfi_stream_active = True
                         continue
 
+                    source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
+                    if (
+                        price is not None and price > 0
+                        and not source_is_binance
+                        and state.gold_history_reference_price is not None
+                        and not state.gold_history_basis_applied
+                    ):
+                        offset = rebase_gold_reference_history(state, price, event_time)
+                        if offset is not None:
+                            log.info(
+                                "Retained GOLD history using GC=F reference candles rebased to Binance XAUUSDT: offset=%s; history remains a labelled reference proxy",
+                                round(offset, 6),
+                            )
+
                     if not state.binance_tradfi_stream_active:
-                        # Never mix Yahoo GC=F with XAUUSDT candles.
-                        source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
-                        if not source_is_binance:
-                            for candles in state.candles.values():
-                                candles.clear()
-                            state.latest_analysis.clear()
-                            state.exchange_prices.clear()
-                        state.data_source = "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
+                        if state.gold_history_basis_applied and state.gold_history_basis_offset is not None:
+                            state.data_source = (
+                                "Binance Futures TradFi Perpetual XAUUSDT live + Yahoo Finance GC=F history "
+                                "rebased to first Binance quote (historical reference proxy; not native XAUUSDT OHLC)"
+                            )
+                        elif source_is_binance:
+                            # Keep the native Binance history source label when REST bootstrap succeeded.
+                            state.data_source = state.data_source or "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
+                        else:
+                            state.data_source = "Binance Futures TradFi Perpetual XAUUSDT live; historical candles unavailable"
 
                     state.binance_tradfi_stream_active = True
                     state.connection_error = None
@@ -994,6 +1070,7 @@ async def gold_tradfi_stream_worker() -> None:
                         state.mark_price = price
                         state.index_price = None
                         state.mark_ts = event_time
+                        state.live_price_source = "Binance XAUUSDT TradFi Perpetual continuous-kline stream"
                         state.exchange_prices.append((event_time, price))
 
                     if k.get("x") and timeframe in TIMEFRAMES:
@@ -1120,6 +1197,7 @@ def record_vantage_heartbeat(payload: dict[str, Any]) -> dict[str, Any]:
         state.mark_price = price
         state.index_price = price
         state.mark_ts = now_ms()
+        state.live_price_source = "Vantage MT5 XAUUSD live tick"
         state.vantage_match_reason = "Direct Vantage MT5 broker feed"
         return {
             "asset": key,
@@ -1413,6 +1491,21 @@ async def campaign_scanner() -> dict[str, Any]:
             result["broker_candle_feed"] = bool(state.broker_candle_feed)
             result["broker_candle_time"] = state.broker_candle_ts
             result["live_reference_price"] = state.mark_price
+            result["live_price"] = state.mark_price
+            result["live_price_timestamp"] = state.mark_ts
+            result["live_price_age_seconds"] = round((now_ms() - state.mark_ts) / 1000, 1) if state.mark_ts else None
+            is_live_quote = bool(
+                state.mark_ts
+                and now_ms() - state.mark_ts <= 15_000
+                and state.live_price_source
+                and ("Binance" in state.live_price_source or "Vantage" in state.live_price_source)
+            )
+            result["live_price_status"] = "LIVE" if is_live_quote else ("REFERENCE" if state.mark_price is not None else "WAITING")
+            result["live_price_source"] = state.live_price_source or "Live quote not yet received"
+            one_minute = state.candles.get("1m")
+            result["one_minute_close"] = float(one_minute[-1]["c"]) if one_minute else None
+            result["gold_history_basis_offset"] = state.gold_history_basis_offset if state.key == "GOLD" else None
+            result["gold_history_basis_adjusted"] = bool(state.gold_history_basis_applied) if state.key == "GOLD" else False
             assets.append(result)
 
         _campaign_scanner_cache = {
