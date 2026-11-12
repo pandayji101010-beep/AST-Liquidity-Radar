@@ -785,10 +785,24 @@ function renderCampaigns(payload){
     const winText=performance.win_rate_pct===null||performance.win_rate_pct===undefined?'—':n(performance.win_rate_pct,1)+'%';
     const closed=n(performance.closed_positions||0,0);
     const riskLine='Risk '+n(campaign.risk_pct||0,2)+' / '+n(campaign.max_risk_pct||0,2)+'% · Open '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10);
+    const frameData={...(a.higher_timeframes||{}),"1m":a.market_intelligence||{}};
+    const timeframeOrder=["1M","1w","1d","4h","1h","30m","15m","5m","1m"];
+    const timeframeHtml=timeframeOrder.map(tf=>{
+      const direction=frameData[tf]?.side;
+      const cls=direction==="BUY"?"buy":direction==="SELL"?"sell":"neutral";
+      return '<span class="campaign-tf '+cls+'">'+tf+' <b>'+(direction||'—')+'</b></span>';
+    }).join('');
+    const conflicts=(alignment.conflicting_timeframes||[])
+      .map(item=>item.timeframe+' '+(item.side||'—')).join(' · ')||'none';
+    const mtfLine='MTF '+(alignment.status||'WAITING')
+      +' · 1m execution '+((alignment.execution_context||{}).status||'UNAVAILABLE')
+      +' · conflicts '+conflicts;
 
     return '<section class="campaign-asset">'
       +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>Live price: <b data-live-price="'+a.asset+'">'+n(price,digits)+'</b></span><span>Bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
+      +'<div class="campaign-tf-row">'+timeframeHtml+'</div>'
+      +'<div class="campaign-foot">'+mtfLine+'</div>'
       +renderLiquidityLevels(a,digits)
       +'<div class="campaign-meta">'+riskLine+' · Closed '+closed+' · Win rate '+winText+' · Net '+n(performance.net_r||0,2)+'R</div>'
       +'<div class="campaign-foot">Analysis refreshes on completed candles. Plans are simulated; no broker orders are sent.</div>'
