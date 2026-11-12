@@ -791,6 +791,7 @@ function renderLiquidityLevels(asset,digits){
 }
 
 function updateLiquidityRankingPrices(asset,currentPrice){
+  const rankOrdinal=value=>value===1?'1st':value===2?'2nd':value===3?'3rd':value+'th';
   const price=Number(currentPrice);
   if(!Number.isFinite(price)||price<=0) return;
   document.querySelectorAll('.liq-ranking[data-asset="'+asset+'"]').forEach(panel=>{
