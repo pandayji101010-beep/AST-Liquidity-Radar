@@ -21,7 +21,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
-from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
+from historical_sources import (
+    load_btc_um_history,
+    load_binance_tradfi_gold_history,
+    load_binance_tradfi_gold_live,
+    load_gold_history,
+    load_gold_live,
+)
 from ast_campaign_orchestrator import ASTFourEngineOrchestrator
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,7 +42,7 @@ log = logging.getLogger("AST-Liquidity-Radar")
 REST_BASE = "https://fapi.binance.com"
 MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
-SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSD"}
+SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
 TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 HISTORY_BARS = max(25_000, int(os.getenv("AST_HISTORY_BARS", "25_000")))
 BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
@@ -123,6 +129,8 @@ class AssetState:
     data_source: str | None = None
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
+    binance_tradfi_stream_active: bool = False
+    binance_tradfi_last_update_ts: int | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -651,6 +659,8 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "asset": key,
         "exchange_symbol": st.symbol,
         "historical_source": st.data_source,
+        "binance_tradfi_feed_active": st.binance_tradfi_stream_active,
+        "binance_tradfi_feed_age_seconds": round((now_ms() - st.binance_tradfi_last_update_ts) / 1000, 1) if st.binance_tradfi_last_update_ts else None,
         "broker_candle_feed": st.broker_candle_feed,
         "broker_candle_age_seconds": round((now_ms() - st.broker_candle_ts) / 1000, 1) if st.broker_candle_ts else None,
         "exchange_price": st.mark_price,
@@ -720,10 +730,16 @@ async def bootstrap_market_data() -> None:
                 loaded = await load_btc_um_history(http_client, state.symbol, HISTORY_BARS)
                 state.data_source = loaded["source"]
             else:
-                # XAUUSD is not a Binance USD-M symbol. Use a separate gold
-                # reference series and keep Vantage MT5 as the broker-price bridge.
-                loaded = await load_gold_history(http_client, HISTORY_BARS)
+                # Binance TradFi Perpetual XAUUSDT is the primary Gold reference.
+                # Yahoo GC=F remains a labelled fallback if the Binance REST host
+                # is unavailable from this deployment region.
+                try:
+                    loaded = await load_binance_tradfi_gold_history(http_client, HISTORY_BARS)
+                except Exception as binance_exc:
+                    log.warning("Binance TradFi GOLD bootstrap unavailable; using GC=F reference fallback: %s", binance_exc)
+                    loaded = await load_gold_history(http_client, HISTORY_BARS)
                 state.data_source = loaded["source"]
+                state.connection_error = None
 
             for tf in TIMEFRAMES:
                 rows = loaded["candles"].get(tf, [])
@@ -1439,7 +1455,9 @@ async def config() -> dict[str, Any]:
             "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
             "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
-            "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
+            "BTC market data uses Binance USD-M; GOLD primary market data uses XAUUSDT TRADIFI_PERPETUAL continuous klines. Yahoo GC=F is a labelled reference fallback only.",
+            "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
+            "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
             "Campaign engine replays completed 1m candles sequentially; higher-timeframe candles are exposed only after their own close timestamp.",
             "1W and 1M context are aggregated from completed daily candles; no incomplete calendar period is used for confirmation.",
