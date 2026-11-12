@@ -1389,14 +1389,17 @@ async def refresh_campaign_scanner_cache() -> dict[str, Any]:
     async with _campaign_scanner_cache_lock:
         loop = asyncio.get_running_loop()
         assets: list[dict[str, Any]] = []
-        results = await asyncio.gather(*(
-            asyncio.to_thread(
+        results: list[dict[str, Any]] = []
+        for state in states.values():
+            result = await asyncio.to_thread(
                 state.campaign_engine.snapshot,
                 state.candles,
                 state.key,
             )
-            for state in states.values()
-        ))
+            results.append(result)
+            # Yield between assets so HTTP health checks and websocket tasks
+            # are serviced between the two CPU-heavy strategy replays.
+            await asyncio.sleep(0)
         for state, result in zip(states.values(), results):
             result["data_source"] = state.data_source or "Source not reported"
             result["broker_candle_feed"] = bool(state.broker_candle_feed)
