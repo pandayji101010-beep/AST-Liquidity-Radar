@@ -6,7 +6,7 @@
 - BTC historical OHLC is loaded from native Binance USD-M archives independently for 1m, 5m, 15m, 30m, 1h, 4h and 1d. Up to 25,000 closed candles per timeframe are retained.
 - GOLD uses Binance Futures TradFi Perpetual XAUUSDT only. Live OHLCV comes from Binance continuous-kline WebSocket streams for 1m, 5m, 15m, 30m, 1h, 4h and 1d.
 - Gold history first requests Binance `/fapi/v1/continuousKlines` with `pair=XAUUSDT` and `contractType=TRADIFI_PERPETUAL`. If that REST route is unavailable, the loader tries Binance's official USD-M public XAUUSDT klines archives from the TradFi listing date (2026-01-05). Higher timeframes are resampled only from Binance XAUUSDT 1m candles when native intervals are unavailable.
-- There is no Yahoo, COMEX, GC=F, CFD, or third-party price-series fallback in the Gold strategy. If Binance history is unavailable, the dashboard keeps the Binance live stream and reports historical data as warming up rather than inserting another instrument.
+- Gold has no alternate-instrument or third-party price-series fallback. If Binance history is unavailable, the dashboard keeps the Binance live stream and reports historical data as warming up rather than inserting another instrument.
 - The Vantage MT5 bridge is optional and separate. It is not used as a historical fallback for Binance Gold strategy data. It forwards read-only broker quotes/candles only when explicitly connected.
 
 ## Enable Vantage XAUUSD live quote mapping
