@@ -792,7 +792,7 @@ function renderLiquidityLevels(asset,digits){
 function updateLiquidityRankingPrices(asset,currentPrice){
   const price=Number(currentPrice);
   if(!Number.isFinite(price)||price<=0) return;
-  document.querySelectorAll('.liquidity-ranking[data-asset="'+asset+'"]').forEach(panel=>{
+  document.querySelectorAll('.liq-ranking[data-asset="'+asset+'"]').forEach(panel=>{
     panel.querySelectorAll('[data-ranking-side]').forEach(list=>{
       const rows=Array.from(list.querySelectorAll('[data-liq-rank-row]'));
       rows.sort((a,b)=>Math.abs(Number(a.dataset.price)-price)-Math.abs(Number(b.dataset.price)-price));
