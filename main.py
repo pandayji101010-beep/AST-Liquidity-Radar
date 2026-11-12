@@ -781,15 +781,40 @@ async def bootstrap_market_data() -> None:
 
 
 async def gold_market_worker() -> None:
-    """Refresh GOLD reference candles from XAUS; never present them as broker fills."""
+    """Refresh Gold with Binance TradFi data first; use GC=F only before Binance is available."""
     assert http_client is not None
     state = states["GOLD"]
     while True:
         try:
             if state.broker_candle_feed:
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 continue
-            loaded = await load_gold_live(http_client)
+
+            stream_fresh = (
+                state.binance_tradfi_stream_active
+                and state.binance_tradfi_last_update_ts is not None
+                and now_ms() - state.binance_tradfi_last_update_ts <= 20_000
+            )
+            if stream_fresh:
+                state.connection_error = None
+                await asyncio.sleep(10)
+                continue
+
+            source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
+            if source_is_binance:
+                # A stale Binance source must never be silently replaced with GC=F.
+                loaded = await load_binance_tradfi_gold_live(http_client)
+            else:
+                loaded = await load_gold_live(http_client)
+
+            # A WebSocket packet may have arrived while the REST request was in flight.
+            if (
+                state.binance_tradfi_stream_active
+                and state.binance_tradfi_last_update_ts is not None
+                and now_ms() - state.binance_tradfi_last_update_ts <= 20_000
+            ):
+                continue
+
             data = loaded["candles"]
             for tf, rows in data.items():
                 if tf not in state.candles:
@@ -804,17 +829,25 @@ async def gold_market_worker() -> None:
 
             latest = loaded["latest"]
             state.mark_price = float(latest["c"])
-            state.index_price = state.mark_price
+            state.index_price = None if source_is_binance else state.mark_price
             state.mark_ts = int(latest["t"]) + 60_000
             state.exchange_prices.append((state.mark_ts, state.mark_price))
-            state.data_source = "Yahoo Finance COMEX Gold Futures (GC=F); reference only"
+            state.data_source = loaded["source"]
             state.connection_error = None
+            if source_is_binance:
+                state.binance_tradfi_last_update_ts = now_ms()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
-            log.warning("Gold reference feed refresh failed: %s", exc)
-        await asyncio.sleep(60)
+            if "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or ""):
+                state.connection_error = f"Binance XAUUSDT TradFi feed stale; retaining last Binance candles: {str(exc)[:120]}"
+                log.warning("Binance TradFi GOLD refresh failed; keeping last Binance bars: %s", exc)
+            else:
+                state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
+                log.warning("Gold reference feed refresh failed: %s", exc)
+        await asyncio.sleep(30)
+
+
 
 async def market_stream_worker() -> None:
     streams: list[str] = ["!forceOrder@arr"]
