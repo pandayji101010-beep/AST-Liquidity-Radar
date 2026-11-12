@@ -126,3 +126,14 @@ The live Entry Engine now uses a balanced threshold profile to improve setup fre
 - Choppy / ranging 1m conditions remain blocked. Campaign risk caps and minimum 1.5R directional liquidity target are unchanged.
 - The dashboard reports the latest Entry Engine blocking reason. More signals are not a promise of higher win rate; evaluate them over a sufficiently large fee/slippage-adjusted sample.
 
+
+
+## Persistent liquidity pools by timeframe
+
+- MBIE maintains one active untouched buy-side pool and one active untouched sell-side pool independently for each completed timeframe: 1M, 1W, 1D, 4H, 1H, 30M, 15M, 5M and 1M.
+- A pool is chosen from confirmed equal highs/lows, swing highs/lows or the previous 20-candle range extreme. Its price and origin remain fixed while active; a newly appearing closer candidate cannot overwrite it.
+- A buy-side level is consumed when that timeframe's candle trades at/above it; a wick that closes back below is labelled SWEPT, while a close at/above is labelled BROKEN. Sell-side logic is mirrored.
+- After consumption, the same candle does not immediately install another level. The next untouched candidate is activated on the following completed candle of that same timeframe. Consumed source IDs are excluded so an old swept high/low is not reintroduced from the rolling range.
+- Dashboard shows the active buy-side / sell-side price, its distance from that timeframe's last close, and the most recent cleared event. Higher-timeframe pools do not get cleared by a lower-timeframe wick.
+- These are OHLC-derived liquidity reference pools, not exchange-confirmed resting orders or a view of every trader's stop placement.
+

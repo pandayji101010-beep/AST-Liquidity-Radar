@@ -136,6 +136,70 @@ class FourEngineArchitectureTests(unittest.TestCase):
         engine.process_bar(next_bar, next_bar["t"] + 60_000, micro, mtf)
         self.assertEqual(engine.snapshot()["campaign"]["open_positions"], 2)
 
+    def test_persistent_liquidity_level_stays_fixed_until_swept_then_rolls_forward(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        bars = [
+            {"t": t0, "o": 100.0, "h": 108.0, "l": 99.0, "c": 105.0, "v": 100},
+            {"t": t0 + 300_000, "o": 105.0, "h": 109.0, "l": 104.0, "c": 108.0, "v": 100},
+        ]
+        first_base = {
+            "prior_high": 110.0, "prior_high_time": t0,
+            "prior_low": 95.0, "prior_low_time": t0,
+        }
+        first = mbie._update_persistent_liquidity(bars, "5m", first_base)
+        self.assertEqual(first["buy_side"]["price"], 110.0)
+        self.assertEqual(first["sell_side"]["price"], 95.0)
+
+        # A new closer high forms, but the live 110 pool must not be overwritten.
+        bars.append({"t": t0 + 600_000, "o": 108.0, "h": 109.5, "l": 106.0, "c": 109.0, "v": 100})
+        closer_base = {
+            "prior_high": 109.5, "prior_high_time": t0 + 600_000,
+            "swing_high": 109.5, "pivot_high_time": t0 + 600_000,
+            "prior_low": 95.0, "prior_low_time": t0,
+        }
+        unchanged = mbie._update_persistent_liquidity(bars, "5m", closer_base)
+        self.assertEqual(unchanged["buy_side"]["price"], 110.0)
+
+        # A wick through 110 that closes back below consumes it as a sweep.
+        bars.append({"t": t0 + 900_000, "o": 109.0, "h": 111.0, "l": 108.5, "c": 109.2, "v": 100})
+        swept = mbie._update_persistent_liquidity(bars, "5m", {
+            "prior_high": 111.0, "prior_high_time": t0 + 900_000,
+            "prior_low": 95.0, "prior_low_time": t0,
+        })
+        self.assertIsNone(swept["buy_side"])
+        self.assertEqual(swept["last_cleared"]["buy_side"]["event"], "SWEPT")
+
+        # Only on the following 5m candle can the next untouched level activate.
+        bars.append({"t": t0 + 1_200_000, "o": 109.2, "h": 110.0, "l": 108.8, "c": 109.5, "v": 100})
+        next_pool = mbie._update_persistent_liquidity(bars, "5m", {
+            "prior_high": 112.0, "prior_high_time": t0 + 1_200_000,
+            "prior_low": 95.0, "prior_low_time": t0,
+        })
+        self.assertEqual(next_pool["buy_side"]["price"], 112.0)
+
+    def test_persistent_liquidity_state_is_separate_for_each_timeframe(self):
+        mbie = ASTMarketBehaviourIntelligenceEngine()
+        t0 = 1_700_000_000_000
+        five_min = [{"t": t0, "o": 100, "h": 105, "l": 95, "c": 101, "v": 100}]
+        fifteen_min = [{"t": t0, "o": 100, "h": 106, "l": 94, "c": 101, "v": 100}]
+        mbie._update_persistent_liquidity(five_min, "5m", {
+            "prior_high": 110, "prior_high_time": t0 - 300_000,
+            "prior_low": 90, "prior_low_time": t0 - 300_000,
+        })
+        mbie._update_persistent_liquidity(fifteen_min, "15m", {
+            "prior_high": 120, "prior_high_time": t0 - 900_000,
+            "prior_low": 80, "prior_low_time": t0 - 900_000,
+        })
+        five_min.append({"t": t0 + 300_000, "o": 101, "h": 111, "l": 99, "c": 109, "v": 100})
+        mbie._update_persistent_liquidity(five_min, "5m", {
+            "prior_high": 111, "prior_high_time": t0 + 300_000,
+            "prior_low": 90, "prior_low_time": t0 - 300_000,
+        })
+        fifteen_snapshot = mbie._liquidity_snapshot(mbie._liquidity_trackers["15m"], "15m", 101)
+        self.assertEqual(fifteen_snapshot["buy_side"]["price"], 120)
+        self.assertEqual(fifteen_snapshot["sell_side"]["price"], 80)
+
     def test_orchestrator_runs_four_engines_and_excludes_incomplete_daily_candle(self):
         bars = self.minute_bars(80)
         future_daily = [{
@@ -200,6 +264,16 @@ class FourEngineArchitectureTests(unittest.TestCase):
             self.assertEqual(engine.campaign_engine.contract_value_per_price_unit, 2.0)
             engine.snapshot({"1m": bars}, "GOLD")
             self.assertEqual(engine.campaign_engine.contract_value_per_price_unit, 100.0)
+
+    def test_nearest_liquidity_uses_active_unconsumed_pools_only(self):
+        frames = {
+            "1h": {"persistent_liquidity": {"buy_side": {"price": 110, "label": "LOCKED HIGH"}, "sell_side": {"price": 90, "label": "LOCKED LOW"}}},
+            "5m": {"persistent_liquidity": {"buy_side": {"price": 105, "label": "CLOSER HIGH"}, "sell_side": None}},
+        }
+        nearest_buy = ASTMarketBehaviourIntelligenceEngine._nearest_htf_liquidity(frames, "BUY", 100)
+        nearest_sell = ASTMarketBehaviourIntelligenceEngine._nearest_htf_liquidity(frames, "SELL", 100)
+        self.assertEqual(nearest_buy["price"], 105)
+        self.assertEqual(nearest_sell["price"], 90)
 
     def test_mbie_exposes_adx_phase_and_honest_auction_coverage(self):
         mbie = ASTMarketBehaviourIntelligenceEngine()

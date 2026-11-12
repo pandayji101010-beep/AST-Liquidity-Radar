@@ -161,8 +161,12 @@ class ASTInstitutionalCampaignStrategy:
         ema50 = ASTInstitutionalCampaignStrategy._ema(closes[-min(len(closes), 480):], 50)
         atr = ASTInstitutionalCampaignStrategy._atr(bars)
         prior = bars[-21:-1] if len(bars) >= 21 else bars[:-1]
-        prior_high = max((float(x["h"]) for x in prior), default=None)
-        prior_low = min((float(x["l"]) for x in prior), default=None)
+        prior_high_bar = max(prior, key=lambda x: float(x["h"])) if prior else None
+        prior_low_bar = min(prior, key=lambda x: float(x["l"])) if prior else None
+        prior_high = float(prior_high_bar["h"]) if prior_high_bar else None
+        prior_low = float(prior_low_bar["l"]) if prior_low_bar else None
+        prior_high_time = int(prior_high_bar["t"]) if prior_high_bar else None
+        prior_low_time = int(prior_low_bar["t"]) if prior_low_bar else None
 
         swing_high = None
         swing_low = None
@@ -297,9 +301,12 @@ class ASTInstitutionalCampaignStrategy:
             "close": close, "candle_time": int(last["t"]),
             "ema20": ema20, "ema50": ema50, "atr": atr, "atr_pct": atr_pct,
             "prior_high": prior_high, "prior_low": prior_low,
+            "prior_high_time": prior_high_time, "prior_low_time": prior_low_time,
             "previous_period_high": previous_period_high, "previous_period_low": previous_period_low,
             "swing_high": swing_high, "swing_low": swing_low,
             "equal_high": equal_high, "equal_low": equal_low,
+            "equal_high_time": pivot_high_time if equal_high is not None else None,
+            "equal_low_time": pivot_low_time if equal_low is not None else None,
             "pivot_high_time": pivot_high_time, "pivot_low_time": pivot_low_time,
             "upper_sweep": upper_sweep, "lower_sweep": lower_sweep,
             "bos_side": bos_side, "structure_event": structure_event,

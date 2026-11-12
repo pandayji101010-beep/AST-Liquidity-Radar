@@ -79,6 +79,7 @@ class ASTFourEngineOrchestrator:
         }
 
     def _replay(self, candles: dict[str, Any], asset: str) -> dict[str, Any]:
+        self.mbie.reset_liquidity_trackers()
         one = Kernel._clean_bars(candles.get("1m"))
         if not one:
             self.entry_engine.reset()

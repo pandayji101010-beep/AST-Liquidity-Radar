@@ -478,6 +478,25 @@ body{
 .engine-contract{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .engine-contract span{font-size:9px;border:1px solid #2b4055;border-radius:7px;padding:5px 7px;color:#becbd8;background:#0b1724}
 .engine-contract b{color:#eaf2f8}
+.liquidity-panel{margin-top:12px;padding:12px;border:1px solid #31465b;border-radius:12px;background:#0b1724}
+.liquidity-panel-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.liquidity-panel-title{font-size:12px;font-weight:900;letter-spacing:.05em;color:#eef4f9}
+.liquidity-panel-note{font-size:10px;color:var(--muted);line-height:1.5;margin-top:6px}
+.liquidity-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.liquidity-tf{min-width:0;background:#101d2b;border:1px solid #26384b;border-radius:9px;padding:9px}
+.liquidity-tf-head{display:flex;justify-content:space-between;align-items:center;gap:7px;margin-bottom:8px}
+.liquidity-tf-head b{font-size:12px;color:#eef4f9}
+.liquidity-tf-head span{font-size:9px;color:var(--muted)}
+.liquidity-side{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:7px 8px;border-radius:7px;background:#0b1724;margin-top:5px;min-width:0}
+.liquidity-side .name{font-size:9px;font-weight:850;letter-spacing:.04em}
+.liquidity-side strong{font-size:12px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;text-align:right}
+.liquidity-side small{grid-column:1/-1;font-size:9px;color:var(--muted)}
+.liquidity-side.buy .name,.liquidity-side.buy strong{color:var(--green)}
+.liquidity-side.sell .name,.liquidity-side.sell strong{color:var(--red)}
+.liquidity-empty{font-size:11px;color:var(--muted);padding:7px 0}
+.liquidity-cleared{font-size:9px;color:var(--muted);line-height:1.4;margin-top:7px;padding-top:6px;border-top:1px solid #26384b}
+@media(max-width:850px){.liquidity-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:420px){.liquidity-grid{grid-template-columns:1fr}.liquidity-tf{padding:9px}}
 @media(max-width:800px){.mbie-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mbie-scenarios{grid-template-columns:1fr}}
 @media(max-width:420px){.mbie-grid{gap:6px}.mbie-item{padding:7px}.mbie-item .v{font-size:11px}}
 @media(max-width:700px){
@@ -646,6 +665,39 @@ function renderMarketIntelligence(info,digits){
     +'</div>';
 }
 
+function renderLiquidityLevels(asset,digits){
+  const frames={...(asset.higher_timeframes||{}),"1m":asset.market_intelligence||{}};
+  const order=["1M","1w","1d","4h","1h","30m","15m","5m","1m"];
+  const frameRows=order.map(tf=>{
+    const frame=frames[tf]||{};
+    const pools=frame.persistent_liquidity||{};
+    const buy=pools.buy_side||null;
+    const sell=pools.sell_side||null;
+    const ref=Number(frame.close);
+    const sideHtml=(level,side)=>{
+      if(!level) return '<div class="liquidity-side '+side+'"><span class="name">'+(side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓')+'</span><strong>—</strong><small>Waiting for untouched liquidity</small></div>';
+      const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
+      const distPct=level.distance_pct!==null&&level.distance_pct!==undefined?Number(level.distance_pct):ref>0?distance/ref*100:0;
+      return '<div class="liquidity-side '+side+'"><span class="name">'+(side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓')+'</span><strong>'+n(level.price,digits)+'</strong><small>'+n(distance,digits)+' away · '+n(distPct,3)+'% · '+(level.label||'ACTIVE POOL')+'</small></div>';
+    };
+    const cleared=pools.last_cleared||{};
+    const clearText=[
+      cleared.buy_side?'Buy '+cleared.buy_side.event+' @ '+n(cleared.buy_side.price,digits):null,
+      cleared.sell_side?'Sell '+cleared.sell_side.event+' @ '+n(cleared.sell_side.price,digits):null
+    ].filter(Boolean).join(' · ');
+    return '<article class="liquidity-tf">'
+      +'<div class="liquidity-tf-head"><b>'+tf.toUpperCase()+'</b><span>'+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+'</span></div>'
+      +sideHtml(buy,'buy')+sideHtml(sell,'sell')
+      +'<div class="liquidity-cleared">'+(clearText?'Last cleared · '+clearText:'Last cleared · None recorded')+'</div>'
+      +'</article>';
+  }).join('');
+  return '<section class="liquidity-panel">'
+    +'<div class="liquidity-panel-head"><div class="liquidity-panel-title">ACTIVE LIQUIDITY · ALL TIMEFRAMES</div>'+tag('LOCKED UNTIL SWEPT / BROKEN','neutral')+'</div>'
+    +'<div class="liquidity-panel-note">Each timeframe manages its own levels using its completed candles. A level stays fixed while untouched; after a sweep or break, the next untouched level is selected on the following candle of that same timeframe.</div>'
+    +'<div class="liquidity-grid">'+frameRows+'</div>'
+    +'</section>';
+}
+
 function renderCampaigns(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
@@ -724,6 +776,7 @@ function renderCampaigns(payload){
       +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b>'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
       +renderMarketIntelligence(a.market_intelligence,digits)
+      +renderLiquidityLevels(a,digits)
       +'<div class="campaign-meta">Entry Engine: '+((a.entry_engine||{}).status||'WAITING')+
        ((a.entry_engine||{}).last_candidate?' · '+a.entry_engine.last_candidate.kind+' '+a.entry_engine.last_candidate.side+' · Score '+n(a.entry_engine.last_candidate.score,1)+'/100':'')+'</div>'
       +'<div class="campaign-foot">Entry filter: '+((a.entry_engine||{}).block_reason||a.reason||'Waiting for market data.')+'</div>'

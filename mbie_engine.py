@@ -18,6 +18,175 @@ class ASTMarketBehaviourIntelligenceEngine:
         "fundamental_risk": 5,
     }
 
+    def __init__(self) -> None:
+        # Independent active pools for every candle timeframe. The orchestrator
+        # resets and rebuilds these in timestamp order on each point-in-time replay.
+        self._liquidity_trackers: dict[str, dict[str, Any]] = {}
+
+    def reset_liquidity_trackers(self) -> None:
+        self._liquidity_trackers = {}
+
+    @staticmethod
+    def _liquidity_candidates(base: dict[str, Any], timeframe: str, close: float) -> dict[str, list[dict[str, Any]]]:
+        specs = (
+            ("BUY_SIDE", "equal_high", "equal_high_time", "EQUAL HIGHS"),
+            ("BUY_SIDE", "swing_high", "pivot_high_time", "SWING HIGH"),
+            ("BUY_SIDE", "prior_high", "prior_high_time", "PREVIOUS RANGE HIGH"),
+            ("SELL_SIDE", "equal_low", "equal_low_time", "EQUAL LOWS"),
+            ("SELL_SIDE", "swing_low", "pivot_low_time", "SWING LOW"),
+            ("SELL_SIDE", "prior_low", "prior_low_time", "PREVIOUS RANGE LOW"),
+        )
+        found: dict[str, dict[str, dict[str, Any]]] = {"BUY_SIDE": {}, "SELL_SIDE": {}}
+        for side, price_key, time_key, label in specs:
+            raw_price = base.get(price_key)
+            raw_time = base.get(time_key)
+            if not isinstance(raw_price, (int, float)) or not math.isfinite(float(raw_price)):
+                continue
+            price = float(raw_price)
+            if side == "BUY_SIDE" and price <= close:
+                continue
+            if side == "SELL_SIDE" and price >= close:
+                continue
+            source_time = int(raw_time if raw_time is not None else base.get("candle_time") or 0)
+            if source_time <= 0:
+                continue
+            level_id = f"{timeframe}:{side}:{source_time}:{price:.10f}"
+            found[side].setdefault(level_id, {
+                "id": level_id,
+                "price": price,
+                "label": label,
+                "side": side,
+                "timeframe": timeframe,
+                "source_time": source_time,
+                "formed_at": source_time,
+                "status": "ACTIVE",
+            })
+        return {
+            "BUY_SIDE": sorted(found["BUY_SIDE"].values(), key=lambda x: x["price"]),
+            "SELL_SIDE": sorted(found["SELL_SIDE"].values(), key=lambda x: x["price"], reverse=True),
+        }
+
+    @staticmethod
+    def _liquidity_cross(level: dict[str, Any], candle: dict[str, Any]) -> str | None:
+        price = float(level["price"])
+        side = level["side"]
+        high, low, close = float(candle["h"]), float(candle["l"]), float(candle["c"])
+        if side == "BUY_SIDE" and high >= price:
+            return "BROKEN" if close >= price else "SWEPT"
+        if side == "SELL_SIDE" and low <= price:
+            return "BROKEN" if close <= price else "SWEPT"
+        return None
+
+    def _liquidity_snapshot(self, state: dict[str, Any], timeframe: str, close: float) -> dict[str, Any]:
+        def decorate(level: dict[str, Any] | None, side: str) -> dict[str, Any] | None:
+            if not level:
+                return None
+            result = dict(level)
+            distance = float(result["price"]) - close if side == "BUY_SIDE" else close - float(result["price"])
+            result["distance_points"] = round(max(0.0, distance), 10)
+            result["distance_pct"] = round(max(0.0, distance) / close * 100.0, 5) if close else None
+            return result
+        buy = decorate(state["active"].get("BUY_SIDE"), "BUY_SIDE")
+        sell = decorate(state["active"].get("SELL_SIDE"), "SELL_SIDE")
+        return {
+            "timeframe": timeframe,
+            "status": "TRACKING" if buy or sell else "WAITING FOR UNTOUCHED POOL",
+            "buy_side": buy,
+            "sell_side": sell,
+            "last_cleared": {
+                "buy_side": dict(state["last_cleared"].get("BUY_SIDE")) if state["last_cleared"].get("BUY_SIDE") else None,
+                "sell_side": dict(state["last_cleared"].get("SELL_SIDE")) if state["last_cleared"].get("SELL_SIDE") else None,
+            },
+            "rule": "A level stays fixed until a candle of this same timeframe trades through it. Wick rejection = SWEPT; close through = BROKEN. The next untouched pool is selected from the following timeframe candle.",
+        }
+
+    def _update_persistent_liquidity(
+        self,
+        bars: list[dict[str, Any]],
+        timeframe: str,
+        base: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not bars:
+            return {"timeframe": timeframe, "status": "WAITING FOR DATA", "buy_side": None, "sell_side": None, "last_cleared": {"buy_side": None, "sell_side": None}}
+        state = self._liquidity_trackers.setdefault(timeframe, {
+            "last_bar_time": None,
+            "active": {"BUY_SIDE": None, "SELL_SIDE": None},
+            "consumed_ids": set(),
+            "last_cleared": {"BUY_SIDE": None, "SELL_SIDE": None},
+        })
+        last_time = int(bars[-1]["t"])
+        close = float(bars[-1]["c"])
+
+        # First snapshot: recover the nearest currently untouched pool, and reject
+        # candidates that were already swept/broken after their source candle.
+        if state["last_bar_time"] is None:
+            candidates = self._liquidity_candidates(base, timeframe, close)
+            for side in ("BUY_SIDE", "SELL_SIDE"):
+                for candidate in candidates[side]:
+                    crossed = None
+                    for historical_bar in bars:
+                        if int(historical_bar["t"]) <= int(candidate["source_time"]):
+                            continue
+                        crossed = self._liquidity_cross(candidate, historical_bar)
+                        if crossed:
+                            break
+                    if crossed:
+                        state["consumed_ids"].add(candidate["id"])
+                        state["last_cleared"][side] = {
+                            "price": candidate["price"], "label": candidate["label"],
+                            "event": crossed, "time": int(historical_bar["t"]),
+                            "timeframe": timeframe,
+                        }
+                        continue
+                    state["active"][side] = candidate
+                    break
+            state["last_bar_time"] = last_time
+            return self._liquidity_snapshot(state, timeframe, close)
+
+        # Process each newly closed candle once. If a live candle stream skips
+        # more than one bar, rebuild each intermediate frame point-in-time.
+        prior_time = int(state["last_bar_time"])
+        unseen_indices = [i for i, candle in enumerate(bars) if int(candle["t"]) > prior_time]
+        for new_index in unseen_indices:
+            candle = bars[new_index]
+            candle_time = int(candle["t"])
+            frame_base = base if new_index == len(bars) - 1 else Kernel._frame_snapshot(bars[:new_index + 1], timeframe)
+            consumed_now: set[str] = set()
+            for side in ("BUY_SIDE", "SELL_SIDE"):
+                active = state["active"].get(side)
+                if active:
+                    event = self._liquidity_cross(active, candle)
+                    if event:
+                        state["consumed_ids"].add(active["id"])
+                        state["last_cleared"][side] = {
+                            "price": active["price"], "label": active["label"],
+                            "event": event, "time": candle_time,
+                            "timeframe": timeframe,
+                        }
+                        state["active"][side] = None
+                        consumed_now.add(side)
+            frame_close = float(candle["c"])
+            candidates = self._liquidity_candidates(frame_base, timeframe, frame_close)
+            for side in ("BUY_SIDE", "SELL_SIDE"):
+                if state["active"].get(side) is not None or side in consumed_now:
+                    continue
+                for candidate in candidates[side]:
+                    if candidate["id"] in state["consumed_ids"]:
+                        continue
+                    # Never activate a level that this same completed candle has touched.
+                    if self._liquidity_cross(candidate, candle):
+                        state["consumed_ids"].add(candidate["id"])
+                        state["last_cleared"][side] = {
+                            "price": candidate["price"], "label": candidate["label"],
+                            "event": self._liquidity_cross(candidate, candle),
+                            "time": candle_time, "timeframe": timeframe,
+                        }
+                        continue
+                    state["active"][side] = candidate
+                    break
+            state["last_bar_time"] = candle_time
+        return self._liquidity_snapshot(state, timeframe, close)
+
     @staticmethod
     def _rsi(closes: list[float], period: int = 14) -> float | None:
         if len(closes) <= period:
@@ -188,6 +357,7 @@ class ASTMarketBehaviourIntelligenceEngine:
         price = float(last["c"])
         buy_side = sorted((x for x in levels if x["side"] == "BUY_SIDE" and x["price"] > price), key=lambda x: x["price"])
         sell_side = sorted((x for x in levels if x["side"] == "SELL_SIDE" and x["price"] < price), key=lambda x: x["price"], reverse=True)
+        persistent_liquidity = self._update_persistent_liquidity(clean, timeframe, base)
 
         fvg = base.get("fvg")
         order_block = base.get("order_block")
@@ -221,9 +391,11 @@ class ASTMarketBehaviourIntelligenceEngine:
             "trend_strength": round(min(100.0, efficiency * 55.0 + ema_gap_atr * 20.0 + (10.0 if base.get("volume_confirmed") else 0.0)), 1),
             "momentum": {"status": "LIVE", "direction": momentum, "rsi": round(rsi, 2) if rsi is not None else None, "adx": round(adx, 2) if adx is not None else None, "roc_pct": round(roc, 3)},
             "volatility": {"status": "LIVE", "state": volatility, "atr": atr, "atr_pct": base.get("atr_pct"), "efficiency_ratio": round(efficiency, 3)},
+            "persistent_liquidity": persistent_liquidity,
             "liquidity": {
                 "status": "CANDLE_DERIVED",
                 "buy_side": buy_side[:5], "sell_side": sell_side[:5],
+                "persistent": persistent_liquidity,
                 "sweep": "LOWER_SWEEP" if base.get("lower_sweep") else "UPPER_SWEEP" if base.get("upper_sweep") else None,
                 "acceptance": "ACCEPTED_ABOVE" if prior_high is not None and price > prior_high else "ACCEPTED_BELOW" if prior_low is not None and price < prior_low else "INSIDE_OR_RECLAIMED",
             },
@@ -249,32 +421,27 @@ class ASTMarketBehaviourIntelligenceEngine:
 
     @staticmethod
     def _nearest_htf_liquidity(frames: dict[str, dict[str, Any]], side: str, entry: float) -> dict[str, Any] | None:
-        fields = (
-            ("prior_high", "PREVIOUS HIGH", "BUY"),
-            ("previous_period_high", "PREVIOUS PERIOD HIGH", "BUY"),
-            ("equal_high", "EQUAL HIGHS", "BUY"),
-            ("swing_high", "SWING HIGH", "BUY"),
-            ("range_high", "RANGE HIGH", "BUY"),
-            ("prior_low", "PREVIOUS LOW", "SELL"),
-            ("previous_period_low", "PREVIOUS PERIOD LOW", "SELL"),
-            ("equal_low", "EQUAL LOWS", "SELL"),
-            ("swing_low", "SWING LOW", "SELL"),
-            ("range_low", "RANGE LOW", "SELL"),
-        )
+        key = "buy_side" if side == "BUY" else "sell_side"
         candidates = []
-        for tf, frame in frames.items():
-            if not frame.get("ready"):
+        for timeframe, frame in frames.items():
+            persistent = frame.get("persistent_liquidity") or {}
+            level = persistent.get(key)
+            if not isinstance(level, dict):
                 continue
-            for key, label, direction in fields:
-                value = frame.get(key)
-                if not isinstance(value, (int, float)):
-                    continue
-                price = float(value)
-                if direction == side and (price > entry if side == "BUY" else price < entry):
-                    candidates.append({"price": price, "label": label, "timeframe": tf})
+            price = float(level.get("price") or 0.0)
+            if price <= 0 or (price <= entry if side == "BUY" else price >= entry):
+                continue
+            candidates.append({
+                "price": price,
+                "label": level.get("label", "ACTIVE LIQUIDITY"),
+                "timeframe": timeframe,
+                "level_id": level.get("id"),
+                "distance_points": round(price - entry if side == "BUY" else entry - price, 10),
+            })
         if not candidates:
             return None
-        return min(candidates, key=lambda x: x["price"]) if side == "BUY" else max(candidates, key=lambda x: x["price"])
+        return min(candidates, key=lambda item: item["distance_points"])
+
 
     def summarize(
         self,
@@ -338,14 +505,9 @@ class ASTMarketBehaviourIntelligenceEngine:
         scenarios["reversal_transition"]["status"] = "SUPPORTED" if len(scenarios["reversal_transition"]["evidence"]) >= 2 else "DEVELOPING"
 
         current_price = float(micro.get("close") or 0.0)
-        nearest_buy = self._nearest_htf_liquidity(frames, "BUY", current_price)
-        nearest_sell = self._nearest_htf_liquidity(frames, "SELL", current_price)
-        if nearest_buy is None:
-            buy_targets = micro.get("liquidity", {}).get("buy_side", [])
-            nearest_buy = buy_targets[0] if buy_targets else None
-        if nearest_sell is None:
-            sell_targets = micro.get("liquidity", {}).get("sell_side", [])
-            nearest_sell = sell_targets[0] if sell_targets else None
+        liquidity_frames = {**frames, "1m": micro}
+        nearest_buy = self._nearest_htf_liquidity(liquidity_frames, "BUY", current_price)
+        nearest_sell = self._nearest_htf_liquidity(liquidity_frames, "SELL", current_price)
         return {
             "market_regime": micro.get("market_regime", "WARMING UP"),
             "market_phase": micro.get("market_phase", "UNCLASSIFIED"),
@@ -358,6 +520,7 @@ class ASTMarketBehaviourIntelligenceEngine:
             "score_components": checks,
             "structure_event": micro.get("structure_event") or ("BOS" if micro.get("bos_side") else None),
             "liquidity": micro.get("liquidity", {}),
+            "persistent_liquidity": micro.get("persistent_liquidity", {}),
             "nearest_buy_side_liquidity": nearest_buy,
             "nearest_sell_side_liquidity": nearest_sell,
             "active_zones": micro.get("zones", {}),
