@@ -503,4 +503,8 @@ async def load_gold_live(client: httpx.AsyncClient) -> dict[str, Any]:
     data = {"1m": one_minute, "1d": daily}
     for tf in ("5m", "15m", "30m", "1h", "4h"):
         data[tf] = resample_from_1m(one_minute, tf, 10_000)
-    return {"candles": data, "latest": one_minute[-1]}
+    return {
+        "candles": data,
+        "latest": one_minute[-1],
+        "source": "Yahoo Finance COMEX Gold Futures (GC=F); reference only, not Vantage XAUUSD CFD",
+    }
