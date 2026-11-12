@@ -47,6 +47,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
             for tf in ("1M", "1w", "1d", "4h", "1h", "30m", "15m", "5m")
         }
         aligned = engine.combine(frames)
+        self.assertEqual(engine.combine(frames)["required_agreement_pct"], 60.0)
         self.assertEqual(aligned["status"], "CONFIRMED")
         self.assertEqual(aligned["side"], "BUY")
         self.assertEqual(frames["4h"]["side"], "BUY")
@@ -82,7 +83,12 @@ class FourEngineArchitectureTests(unittest.TestCase):
         second = {"t": first["t"] + 60_000, "o": 100.0, "h": 101.0, "l": 99.7, "c": 100.8}
         candidate = entry.evaluate(1, second, micro, frames, mtf, mbie, campaign_context)
         self.assertIsNotNone(candidate)
+        self.assertIn("qualified", entry.last_block_reason)
         self.assertEqual(candidate["kind"], "MAIN")
+        self.assertEqual(entry.MIN_SCORE, 65.0)
+        self.assertEqual(entry.MIN_CONTEXT_SCORE, 50.0)
+        self.assertEqual(entry.MIN_CONTEXT_COVERAGE, 40.0)
+        self.assertEqual(entry.MAX_SETUP_AGE, 24)
         self.assertEqual(candidate["side"], "BUY")
         self.assertIn("liquidity_targets", candidate)
         self.assertNotIn("stop_loss", candidate)

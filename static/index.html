@@ -726,6 +726,7 @@ function renderCampaigns(payload){
       +renderMarketIntelligence(a.market_intelligence,digits)
       +'<div class="campaign-meta">Entry Engine: '+((a.entry_engine||{}).status||'WAITING')+
        ((a.entry_engine||{}).last_candidate?' · '+a.entry_engine.last_candidate.kind+' '+a.entry_engine.last_candidate.side+' · Score '+n(a.entry_engine.last_candidate.score,1)+'/100':'')+'</div>'
+      +'<div class="campaign-foot">Entry filter: '+((a.entry_engine||{}).block_reason||a.reason||'Waiting for market data.')+'</div>'
       +'<div class="campaign-meta">'+riskLine+'</div>'
       +'<div class="campaign-tf-row">'+tfHtml+'</div>'
       +'<div class="campaign-meta">MTF '+(alignment.status||'WAITING')+' · 1m execution '+((alignment.execution_context||{}).status||'UNAVAILABLE')+' · conflicts '+((alignment.conflicting_timeframes||[]).map(x=>x.timeframe+' '+x.side).join(', ')||'none')+'</div>'

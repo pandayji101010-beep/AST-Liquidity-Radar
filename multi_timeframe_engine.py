@@ -5,6 +5,7 @@ from typing import Any
 
 HTF_ORDER = ("1M", "1w", "1d", "4h", "1h", "30m", "15m", "5m")
 CONTEXT_ORDER = (*HTF_ORDER, "1m")
+MIN_DIRECTIONAL_AGREEMENT = 60.0
 HTF_WEIGHTS = {
     "1M": 1.0, "1w": 1.5, "1d": 2.0, "4h": 2.0,
     "1h": 2.5, "30m": 2.5, "15m": 3.0, "5m": 3.0,
@@ -27,7 +28,7 @@ class ASTMultiTimeframeEngine:
         agreement = max(buy_weight, sell_weight) / total if total else 0.0
         core_ready = all(frames.get(tf, {}).get("ready") for tf in ("1d", "4h", "1h", "15m", "5m"))
         near_term = bool(candidate and frames.get("15m", {}).get("side") == candidate and frames.get("5m", {}).get("side") == candidate)
-        confirmed = bool(core_ready and near_term and agreement >= 0.65)
+        confirmed = bool(core_ready and near_term and agreement >= MIN_DIRECTIONAL_AGREEMENT / 100.0)
         conflict = bool(candidate and not near_term)
         conflicts = [
             {"timeframe": tf, "side": frames[tf].get("side")}
@@ -39,6 +40,7 @@ class ASTMultiTimeframeEngine:
             "side": candidate if confirmed else None,
             "candidate_side": candidate,
             "agreement_pct": round(agreement * 100.0, 1),
+            "required_agreement_pct": MIN_DIRECTIONAL_AGREEMENT,
             "buy_weight": round(buy_weight, 2),
             "sell_weight": round(sell_weight, 2),
             "ready_timeframes": [tf for tf in CONTEXT_ORDER if frames.get(tf, {}).get("ready")],
@@ -65,9 +67,9 @@ class ASTMultiTimeframeEngine:
                 "note": "1m is displayed as execution context; it never overrides weighted higher-timeframe direction.",
             },
             "reason": (
-                "Weighted higher-timeframe bias confirmed; 15m and 5m agree on completed candles."
+                f"Weighted higher-timeframe bias confirmed; 15m and 5m agree and weighted support is at least {MIN_DIRECTIONAL_AGREEMENT:.0f}%."
                 if confirmed else
-                "Timeframe directions conflict; 15m/5m agreement and 65% weighted directional support are required."
+                f"Timeframe directions conflict; 15m/5m agreement and {MIN_DIRECTIONAL_AGREEMENT:.0f}% weighted directional support are required."
                 if conflict else
                 "Waiting for sufficient completed higher-timeframe context."
             ),

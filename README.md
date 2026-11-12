@@ -114,3 +114,15 @@ The full strategy document is maintained in `AST_PYRAMID_STRATEGY_COMPLETE.md`: 
 - Alerts explicitly describe analytical/simulated plans and fills. This application does not submit broker orders.
 - Render Free web services can spin down after 15 minutes without inbound HTTP requests or messages on an existing inbound WebSocket connection. When the service is asleep, its background alert worker cannot monitor the market or send Telegram notifications. Reliable unattended alerts while the dashboard is closed require an always-on service plan. See Render's free-instance limitations.
 
+
+
+## Balanced entry filters (default)
+
+The live Entry Engine now uses a balanced threshold profile to improve setup frequency without removing the core sequence:
+- Weighted MTF agreement: 60% minimum; 15m and 5m must still agree and Daily/4H/1H/15m/5m must all be ready.
+- Entry score: 65/100; MBIE context score: 50/100; weighted input coverage: 40%.
+- Sweep / rejection → BOS/MSS + displacement → same-direction FVG / OB retest with rejection are still required.
+- A setup can remain valid for 24 completed 1m bars; BOS and displacement may be up to 6 bars apart.
+- Choppy / ranging 1m conditions remain blocked. Campaign risk caps and minimum 1.5R directional liquidity target are unchanged.
+- The dashboard reports the latest Entry Engine blocking reason. More signals are not a promise of higher win rate; evaluate them over a sufficiently large fee/slippage-adjusted sample.
+

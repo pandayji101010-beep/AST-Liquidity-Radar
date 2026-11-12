@@ -6,18 +6,22 @@ from typing import Any
 class ASTEntryEngine:
     """Creates main/add-on entry candidates only; it does not size trades or set SL/TP."""
 
-    MIN_SCORE = 70.0
-    MIN_CONTEXT_SCORE = 55.0
-    MIN_CONTEXT_COVERAGE = 45.0
-    MAX_SETUP_AGE = 18
+    # Balanced defaults: preserve every structural confirmation but avoid starving the scanner.
+    MIN_SCORE = 65.0
+    MIN_CONTEXT_SCORE = 50.0
+    MIN_CONTEXT_COVERAGE = 40.0
+    MAX_SETUP_AGE = 24
+    MAX_BOS_DISPLACEMENT_GAP = 6
 
     def __init__(self) -> None:
         self.setup: dict[str, Any] | None = None
         self.last_candidate_time: int | None = None
+        self.last_block_reason = "Waiting for a fresh 1m liquidity sweep / rejection."
 
     def reset(self) -> None:
         self.setup = None
         self.last_candidate_time = None
+        self.last_block_reason = "Waiting for a fresh 1m liquidity sweep / rejection."
 
     @staticmethod
     def _liquidity_targets(frames: dict[str, dict[str, Any]], side: str, entry: float) -> list[dict[str, Any]]:
@@ -63,13 +67,16 @@ class ASTEntryEngine:
         campaign_context: dict[str, Any],
     ) -> dict[str, Any] | None:
         if not micro.get("ready"):
+            self.last_block_reason = "Waiting for enough completed 1m candles to calculate structure and ATR."
             return None
         side_bias = mtf.get("side")
         if micro.get("market_regime") == "RANGING" or micro.get("choppy"):
             self.setup = None
+            self.last_block_reason = "No entry: 1m market is ranging / choppy. Waiting for directional price action."
             return None
         if not side_bias:
             self.setup = None
+            self.last_block_reason = "Waiting for confirmed MTF bias: 15m and 5m must agree, with at least 60% weighted HTF support."
             return None
 
         body = abs(float(bar["c"]) - float(bar["o"]))
@@ -99,10 +106,12 @@ class ASTEntryEngine:
 
         setup = self.setup
         if setup is None:
+            self.last_block_reason = "Waiting for a fresh 1m liquidity sweep or clear rejection aligned with the MTF direction."
             return None
         age = index - int(setup["start_index"])
         if age > self.MAX_SETUP_AGE or setup["side"] != side_bias:
             self.setup = None
+            self.last_block_reason = "The sweep setup expired or HTF direction changed. Waiting for a fresh setup."
             return None
         side = setup["side"]
 
@@ -111,7 +120,7 @@ class ASTEntryEngine:
         if setup["displacement_index"] is None and micro.get("displacement_side") == side:
             setup["displacement_index"] = index
         if setup["bos_index"] is not None and setup["displacement_index"] is not None:
-            if abs(int(setup["bos_index"]) - int(setup["displacement_index"])) <= 4 and setup["zone"] is None:
+            if abs(int(setup["bos_index"]) - int(setup["displacement_index"])) <= self.MAX_BOS_DISPLACEMENT_GAP and setup["zone"] is None:
                 zone = micro.get("fvg")
                 if not zone or zone.get("side") != side:
                     zone = micro.get("order_block")
@@ -124,6 +133,12 @@ class ASTEntryEngine:
             and index > max(int(setup["bos_index"]), int(setup["displacement_index"]))
         )
         if not zone or not after_confirm or setup.get("consumed"):
+            if setup["bos_index"] is None or setup["displacement_index"] is None:
+                self.last_block_reason = "Sweep found: waiting for same-direction BOS/MSS and displacement within 6 candles."
+            elif not zone:
+                self.last_block_reason = "BOS + displacement found: waiting for a valid same-direction FVG / order-block zone."
+            else:
+                self.last_block_reason = "Structure confirmed: waiting for price to revisit the FVG / order-block."
             return None
 
         low, high = float(zone["low"]), float(zone["high"])
@@ -134,7 +149,11 @@ class ASTEntryEngine:
             if side == "BUY" else
             intersects and float(bar["c"]) < midpoint and float(bar["c"]) < float(bar["o"])
         )
-        if not rejection or mtf.get("status") != "CONFIRMED":
+        if not rejection:
+            self.last_block_reason = "FVG / order-block available: waiting for a retest candle to reject in the trade direction."
+            return None
+        if mtf.get("status") != "CONFIRMED":
+            self.last_block_reason = "Retest seen: waiting for final MTF confirmation before entry."
             return None
 
         campaign_side = campaign_context.get("side")
@@ -144,11 +163,16 @@ class ASTEntryEngine:
         elif campaign_side == side and campaign_context.get("can_add_position"):
             kind = "ADD-ON"
         else:
+            self.last_block_reason = "Main campaign or protected add-on conditions are not satisfied. No averaging into a losing position."
             return None
 
         context_score = float(mbie.get("market_context_score") or 0.0)
         context_coverage = float(mbie.get("data_coverage_pct") or 0.0)
         if context_score < self.MIN_CONTEXT_SCORE or context_coverage < self.MIN_CONTEXT_COVERAGE:
+            self.last_block_reason = (
+                f"Market context filter: score {context_score:.1f}/100 (need {self.MIN_CONTEXT_SCORE:.0f}) "
+                f"or data coverage {context_coverage:.1f}% (need {self.MIN_CONTEXT_COVERAGE:.0f}%)."
+            )
             return None
         premium_discount = micro.get("premium_discount")
         location_ok = premium_discount == ("DISCOUNT" if side == "BUY" else "PREMIUM")
@@ -165,6 +189,7 @@ class ASTEntryEngine:
         }
         score = round(sum(checks.values()), 1)
         if score < self.MIN_SCORE:
+            self.last_block_reason = f"Entry confluence score {score:.1f}/100 is below the {self.MIN_SCORE:.0f} minimum."
             return None
 
         targets = self._liquidity_targets(frames, side, float(bar["c"]))
@@ -190,6 +215,10 @@ class ASTEntryEngine:
             "reason": "MBIE context + confirmed MTF direction + 1m sweep/rejection + BOS/MSS + displacement + FVG/OB retest.",
             "execution": "Candidate is formed on a completed 1m candle; Campaign Engine may simulate fill at the next 1m open.",
         }
+        if not targets:
+            self.last_block_reason = "Structure passed, but no directional liquidity target is available. Campaign Engine will not invent a target."
+            return None
         setup["consumed"] = True
         self.last_candidate_time = close_time
+        self.last_block_reason = f"{kind} {side} qualified at {score:.1f}/100; Campaign Engine is validating SL, liquidity TP and risk."
         return candidate
