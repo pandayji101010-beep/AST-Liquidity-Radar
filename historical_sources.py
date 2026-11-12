@@ -7,7 +7,6 @@ import logging
 import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -17,12 +16,10 @@ BINANCE_ARCHIVE = "https://data.binance.vision/data/futures/um"
 BINANCE_FUTURES_REST = "https://fapi.binance.com"
 BINANCE_TRADFI_GOLD_PAIR = "XAUUSDT"
 BINANCE_TRADFI_GOLD_CONTRACT = "TRADIFI_PERPETUAL"
+BINANCE_TRADFI_GOLD_LISTING = datetime(2026, 1, 5, tzinfo=timezone.utc)
 BINANCE_FUTURES_KLINE_LIMIT = 1500
-YAHOO_CHART_HOSTS = (
-    "https://query1.finance.yahoo.com/v8/finance/chart",
-    "https://query2.finance.yahoo.com/v8/finance/chart",
-)
-YAHOO_GOLD_SYMBOL = "GC=F"  # COMEX continuous gold futures; reference, not spot XAUUSD.
+
+TIMEFRAMES_GOLD = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 
 TF_MS = {
     "1m": 60_000,
@@ -298,20 +295,66 @@ async def _load_binance_tradfi_gold_interval(
     return [by_time[key] for key in sorted(by_time)][-wanted:]
 
 
+async def _load_binance_tradfi_gold_archive(
+    client: httpx.AsyncClient,
+    limit: int = 25_000,
+) -> dict[str, Any]:
+    """Backfill XAUUSDT from Binance USD-M public archives from its Jan-2026 listing.
+
+    The archive stores symbol klines. The 1m series is retained in full temporarily
+    to build complete higher timeframes; the dashboard keeps the standard 25k 1m
+    replay window, matching the BTC history capacity.
+    """
+    now = datetime.now(timezone.utc)
+    completed_months = max(
+        0, (now.year - BINANCE_TRADFI_GOLD_LISTING.year) * 12
+        + now.month - BINANCE_TRADFI_GOLD_LISTING.month,
+    )
+    full_minute_limit = max(
+        limit,
+        int((now - BINANCE_TRADFI_GOLD_LISTING).total_seconds() // 60) + 2_000,
+    )
+    minute_rows = await _load_interval_archive(
+        client,
+        BINANCE_TRADFI_GOLD_PAIR,
+        "1m",
+        completed_months,
+        full_minute_limit,
+        semaphore=asyncio.Semaphore(6),
+    )
+    if len(minute_rows) < 25:
+        raise RuntimeError(
+            "Binance XAUUSDT public 1m archive has fewer than 25 closed candles; "
+            "no non-Binance Gold fallback is configured"
+        )
+
+    data = {"1m": minute_rows[-limit:]}
+    for timeframe in ("5m", "15m", "30m", "1h", "4h", "1d"):
+        data[timeframe] = resample_from_1m(minute_rows, timeframe, limit)
+
+    counts = {tf: len(rows) for tf, rows in data.items()}
+    if counts["1d"] < 25:
+        raise RuntimeError(
+            f"Binance XAUUSDT archive produced only {counts['1d']} daily candles; "
+            "not enough history for complete multi-timeframe Gold analysis"
+        )
+    log.info("Binance XAUUSDT archive backfill loaded from TradFi listing: %s", counts)
+    return {
+        "candles": data,
+        "source": (
+            "Binance Futures TradFi Perpetual XAUUSDT public archive "
+            "(native 1m; higher timeframes resampled from Binance 1m)"
+        ),
+        "bars": counts,
+    }
+
+
 async def load_binance_tradfi_gold_history(
     client: httpx.AsyncClient,
     limit: int = 25_000,
 ) -> dict[str, Any]:
-    """Load native XAUUSDT TradFi perpetual OHLCV for every dashboard timeframe."""
-    limits = {
-        "1m": min(max(1, limit), 25_000),
-        "5m": min(max(1, limit), 1_500),
-        "15m": min(max(1, limit), 1_500),
-        "30m": min(max(1, limit), 1_500),
-        "1h": min(max(1, limit), 1_500),
-        "4h": min(max(1, limit), 1_500),
-        "1d": min(max(1, limit), 1_500),
-    }
+    """Load Gold only from Binance continuousKlines, then Binance public archives."""
+    limits = {tf: min(max(1, limit), 25_000) for tf in TIMEFRAMES_GOLD}
     semaphore = asyncio.Semaphore(3)
 
     async def fetch_one(timeframe: str, wanted: int) -> tuple[str, list[dict[str, Any]]]:
@@ -319,29 +362,38 @@ async def load_binance_tradfi_gold_history(
             rows = await _load_binance_tradfi_gold_interval(client, timeframe, wanted, semaphore)
             return timeframe, rows
         except (httpx.HTTPError, ValueError, TypeError, RuntimeError) as exc:
-            log.warning("Binance TradFi GOLD %s history unavailable: %s", timeframe, exc)
+            log.warning("Binance TradFi GOLD %s REST history unavailable: %s", timeframe, exc)
             return timeframe, []
 
     fetched = await asyncio.gather(*(fetch_one(tf, wanted) for tf, wanted in limits.items()))
     data = {tf: rows for tf, rows in fetched}
-    if len(data.get("1m", [])) < 25:
-        raise RuntimeError(
-            "Binance XAUUSDT TRADIFI_PERPETUAL returned fewer than 25 closed 1m candles"
-        )
+    source = (
+        "Binance Futures TradFi Perpetual XAUUSDT continuousKlines "
+        "(native intervals)"
+    )
 
-    # Native Binance bars are preferred. Resample only from Binance 1m data
-    # when a particular native interval is unavailable; never mix Yahoo candles.
+    if any(len(data.get(tf, [])) < 25 for tf in ("1m", "1d", "4h")):
+        log.warning("Binance XAUUSDT continuousKlines REST history is incomplete; trying Binance public archives")
+        archived = await _load_binance_tradfi_gold_archive(client, limit)
+        archive_data = archived["candles"]
+        for timeframe in TIMEFRAMES_GOLD:
+            if len(data.get(timeframe, [])) < 25:
+                data[timeframe] = archive_data.get(timeframe, [])
+        source = archived["source"]
+
+    if len(data.get("1m", [])) < 25:
+        raise RuntimeError("Binance XAUUSDT returned fewer than 25 completed 1m candles")
+
+    # Preserve native Binance intervals whenever available; derive only missing
+    # intervals from the same Binance 1m source, never from a different instrument.
+    full_minute_rows = list(data["1m"])
     for timeframe in ("5m", "15m", "30m", "1h", "4h", "1d"):
-        if not data.get(timeframe):
-            data[timeframe] = resample_from_1m(data["1m"], timeframe, limits[timeframe])
+        if len(data.get(timeframe, [])) < 25:
+            data[timeframe] = resample_from_1m(full_minute_rows, timeframe, limit)
 
     counts = {tf: len(rows) for tf, rows in data.items()}
     log.info("Binance TradFi XAUUSDT history loaded: %s", counts)
-    return {
-        "candles": data,
-        "source": "Binance Futures TradFi Perpetual XAUUSDT continuousKlines (native intervals; Binance 1m resampling fallback)",
-        "bars": counts,
-    }
+    return {"candles": {tf: rows[-limit:] for tf, rows in data.items()}, "source": source, "bars": counts}
 
 
 async def load_binance_tradfi_gold_live(client: httpx.AsyncClient) -> dict[str, Any]:
@@ -360,151 +412,4 @@ async def load_binance_tradfi_gold_live(client: httpx.AsyncClient) -> dict[str, 
         "candles": data,
         "latest": one_minute[-1],
         "source": "Binance Futures TradFi Perpetual XAUUSDT continuousKlines",
-    }
-
-
-def _normalise_yahoo_chart(payload: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
-    chart = payload.get("chart") or {}
-    if chart.get("error"):
-        raise RuntimeError(f"Yahoo chart error: {chart['error']}")
-    results = chart.get("result") or []
-    if not results:
-        raise RuntimeError(f"Yahoo returned no chart result for {YAHOO_GOLD_SYMBOL}")
-
-    result = results[0]
-    timestamps = result.get("timestamp") or []
-    quotes = (result.get("indicators") or {}).get("quote") or []
-    if not quotes:
-        raise RuntimeError("Yahoo chart response has no OHLC quote data")
-    quote_data = quotes[0]
-    arrays = {key: quote_data.get(key) or [] for key in ("open", "high", "low", "close", "volume")}
-
-    current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    duration = TF_MS[timeframe]
-    candles: dict[int, dict[str, Any]] = {}
-    for index, stamp_value in enumerate(timestamps):
-        try:
-            stamp = int(stamp_value) * 1000
-            values = {key: arrays[key][index] for key in ("open", "high", "low", "close")}
-            if any(value is None for value in values.values()):
-                continue
-            if stamp + duration > current_ms:
-                continue
-            candle = {
-                "t": stamp,
-                "o": float(values["open"]),
-                "h": float(values["high"]),
-                "l": float(values["low"]),
-                "c": float(values["close"]),
-                "v": float(arrays["volume"][index] or 0.0) if index < len(arrays["volume"]) else 0.0,
-            }
-            if all(candle[key] > 0 for key in ("o", "h", "l", "c")):
-                candles[stamp] = candle
-        except (TypeError, ValueError, IndexError, OverflowError):
-            continue
-    return [candles[key] for key in sorted(candles)]
-
-
-async def _gold_chart(
-    client: httpx.AsyncClient,
-    date_range: str,
-    interval: str,
-    timeframe: str,
-) -> list[dict[str, Any]]:
-    symbol_path = quote(YAHOO_GOLD_SYMBOL, safe="")
-    last_error: Exception | None = None
-    for host in YAHOO_CHART_HOSTS:
-        try:
-            response = await client.get(
-                f"{host}/{symbol_path}",
-                params={"range": date_range, "interval": interval},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; AST-Liquidity-Radar/2.0)",
-                    "Accept": "application/json",
-                },
-                timeout=25.0,
-            )
-            response.raise_for_status()
-            return _normalise_yahoo_chart(response.json(), timeframe)
-        except (httpx.HTTPError, ValueError, TypeError, RuntimeError) as exc:
-            last_error = exc
-            log.warning("Yahoo chart host failed for %s %s: %s", timeframe, host, exc)
-    raise RuntimeError(f"Yahoo chart unavailable for GOLD {timeframe}: {last_error}")
-
-
-def _resample_from_source(candles: list[dict[str, Any]], timeframe: str, limit: int) -> list[dict[str, Any]]:
-    """Aggregate completed source bars into UTC-aligned bars."""
-    duration = TF_MS[timeframe]
-    expected = duration // TF_MS["1h"]
-    groups: dict[int, list[dict[str, Any]]] = {}
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    for candle in candles:
-        bucket = (int(candle["t"]) // duration) * duration
-        if bucket + duration <= now_ms:
-            groups.setdefault(bucket, []).append(candle)
-    result = []
-    for bucket, rows in sorted(groups.items()):
-        if len(rows) < expected:
-            continue  # Gold 4h bars require four completed 1h source bars.
-        rows.sort(key=lambda item: int(item["t"]))
-        result.append({
-            "t": bucket,
-            "o": float(rows[0]["o"]),
-            "h": max(float(item["h"]) for item in rows),
-            "l": min(float(item["l"]) for item in rows),
-            "c": float(rows[-1]["c"]),
-            "v": sum(float(item.get("v") or 0.0) for item in rows),
-        })
-    return result[-limit:]
-
-
-async def load_gold_history(client: httpx.AsyncClient, limit: int = 10_000) -> dict[str, Any]:
-    """Load COMEX continuous gold futures history as a separate reference series."""
-    specs = {
-        "1m": ("5d", "1m"),
-        "5m": ("1mo", "5m"),
-        "15m": ("1mo", "15m"),
-        "30m": ("1mo", "30m"),
-        "1h": ("2y", "1h"),
-        "1d": ("5y", "1d"),
-    }
-    semaphore = asyncio.Semaphore(3)
-
-    async def fetch_one(tf: str, date_range: str, interval: str):
-        async with semaphore:
-            try:
-                rows = await _gold_chart(client, date_range, interval, tf)
-                return tf, rows
-            except Exception as exc:
-                log.warning("Gold history unavailable for %s: %s", tf, exc)
-                return tf, []
-
-    fetched = await asyncio.gather(*(fetch_one(tf, rg, iv) for tf, (rg, iv) in specs.items()))
-    data = {tf: rows[-limit:] for tf, rows in fetched}
-    data["4h"] = _resample_from_source(data.get("1h", []), "4h", limit)
-    counts = {tf: len(rows) for tf, rows in data.items()}
-    if sum(counts.values()) == 0:
-        raise RuntimeError("Yahoo returned no GC=F gold futures OHLCV candles")
-    return {
-        "candles": data,
-        "source": "Yahoo Finance COMEX Gold Futures (GC=F); reference only, not Vantage XAUUSD CFD",
-        "bars": counts,
-    }
-
-
-async def load_gold_live(client: httpx.AsyncClient) -> dict[str, Any]:
-    """Refresh recent COMEX gold futures candles; these are delayed/reference market bars."""
-    one_minute, daily = await asyncio.gather(
-        _gold_chart(client, "5d", "1m", "1m"),
-        _gold_chart(client, "5d", "1d", "1d"),
-    )
-    if not one_minute:
-        raise RuntimeError("Yahoo GC=F chart returned no recent 1m candles")
-    data = {"1m": one_minute, "1d": daily}
-    for tf in ("5m", "15m", "30m", "1h", "4h"):
-        data[tf] = resample_from_1m(one_minute, tf, 10_000)
-    return {
-        "candles": data,
-        "latest": one_minute[-1],
-        "source": "Yahoo Finance COMEX Gold Futures (GC=F); reference only, not Vantage XAUUSD CFD",
     }

@@ -4,10 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from historical_sources import (
-    _normalise_yahoo_chart,
-    _resample_from_source,
     load_btc_um_history,
-    load_gold_live,
     load_binance_tradfi_gold_history,
     _normalise_binance_continuous_klines,
     resample_from_1m,
@@ -15,15 +12,35 @@ from historical_sources import (
 
 
 class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_yahoo_gold_live_fallback_returns_a_source_label(self):
-        bars = [
-            {"t": 1_700_000_000_000, "o": 2350.0, "h": 2352.0, "l": 2349.0, "c": 2351.0, "v": 10.0},
-            {"t": 1_700_000_060_000, "o": 2351.0, "h": 2353.0, "l": 2350.0, "c": 2352.0, "v": 11.0},
+    async def test_binance_archive_is_used_when_continuous_rest_is_blocked(self):
+        now_ms = int(time.time() * 1000)
+        start = ((now_ms - 27 * 86_400_000) // 86_400_000) * 86_400_000
+        minute_rows = [
+            {"t": start + index * 60_000, "o": 2350.0, "h": 2352.0,
+             "l": 2349.0, "c": 2351.0, "v": 1.0}
+            for index in range(26 * 24 * 60)
         ]
-        with patch("historical_sources._gold_chart", new=AsyncMock(side_effect=[bars, bars])):
-            result = await load_gold_live(object())
-        self.assertIn("Yahoo Finance COMEX Gold Futures (GC=F)", result["source"])
-        self.assertEqual(result["latest"]["c"], 2352.0)
+        archive_candles = {"1m": minute_rows[-25_000:]}
+        for timeframe in ("5m", "15m", "30m", "1h", "4h", "1d"):
+            archive_candles[timeframe] = resample_from_1m(minute_rows, timeframe, 25_000)
+        archive_payload = {
+            "candles": archive_candles,
+            "source": "Binance Futures TradFi Perpetual XAUUSDT public archive",
+            "bars": {tf: len(rows) for tf, rows in archive_candles.items()},
+        }
+
+        async def no_rest(*args, **kwargs):
+            return []
+
+        with patch("historical_sources._load_binance_tradfi_gold_interval", new=AsyncMock(side_effect=no_rest)), patch(
+            "historical_sources._load_binance_tradfi_gold_archive",
+            new=AsyncMock(return_value=archive_payload),
+        ) as archive:
+            result = await load_binance_tradfi_gold_history(object(), limit=25_000)
+        archive.assert_awaited_once()
+        self.assertIn("Binance Futures TradFi Perpetual XAUUSDT public archive", result["source"])
+        self.assertEqual(result["bars"]["1m"], 25_000)
+        self.assertGreaterEqual(result["bars"]["1d"], 25)
 
     def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
         now_ms = int(time.time() * 1000)
@@ -87,29 +104,6 @@ class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
             {"1m", "5m", "15m", "30m", "1h", "4h", "1d"},
         )
 
-    def test_yahoo_payload_is_normalised_and_null_rows_skipped(self):
-        payload = {
-            "chart": {
-                "error": None,
-                "result": [{
-                    "timestamp": [1_700_000_000, 1_700_000_060],
-                    "indicators": {
-                        "quote": [{
-                            "open": [1980.0, None],
-                            "high": [1982.0, None],
-                            "low": [1979.0, None],
-                            "close": [1981.0, None],
-                            "volume": [1234, None],
-                        }]
-                    },
-                }],
-            }
-        }
-        candles = _normalise_yahoo_chart(payload, "1m")
-        self.assertEqual(len(candles), 1)
-        self.assertEqual(candles[0]["t"], 1_700_000_000_000)
-        self.assertEqual(candles[0]["c"], 1981.0)
-
     def test_1m_resampler_rejects_partial_five_minute_bucket(self):
         now_ms = int(time.time() * 1000)
         bucket = ((now_ms - 600_000) // 300_000) * 300_000
@@ -128,17 +122,7 @@ class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0]["t"], bucket)
         self.assertEqual(result[0]["v"], 5)
 
-    def test_1h_resampler_rejects_partial_four_hour_bucket(self):
-        now_ms = int(time.time() * 1000)
-        bucket = ((now_ms // 14_400_000) - 1) * 14_400_000
-        rows = [
-            {"t": bucket + i * 3_600_000, "o": 100+i, "h": 102+i,
-             "l": 99+i, "c": 101+i, "v": 1}
-            for i in range(4)
-        ]
-        result = _resample_from_source(rows, "4h", 100)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["t"], bucket)
+
 
 
 class BtcNativeHistoryTests(unittest.IsolatedAsyncioTestCase):
