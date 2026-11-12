@@ -21,7 +21,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ast_strategy import ASTStructureStrategy
-from historical_sources import load_btc_um_history, load_gold_history, load_gold_live
+from historical_sources import (
+    load_btc_um_history,
+    load_binance_tradfi_gold_history,
+    load_binance_tradfi_gold_live,
+    load_gold_history,
+    load_gold_live,
+)
 from ast_campaign_orchestrator import ASTFourEngineOrchestrator
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,7 +42,7 @@ log = logging.getLogger("AST-Liquidity-Radar")
 REST_BASE = "https://fapi.binance.com"
 MARKET_WS_BASE = "wss://fstream.binance.com/market/stream"
 PUBLIC_WS_BASE = "wss://fstream.binance.com/public/stream"
-SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSD"}
+SYMBOLS = {"BTC": "BTCUSDT", "GOLD": "XAUUSDT"}
 TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 HISTORY_BARS = max(25_000, int(os.getenv("AST_HISTORY_BARS", "25_000")))
 BRIDGE_SECRET = os.getenv("VANTAGE_BRIDGE_SECRET", "replace-this-secret")
@@ -123,6 +129,8 @@ class AssetState:
     data_source: str | None = None
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
+    binance_tradfi_stream_active: bool = False
+    binance_tradfi_last_update_ts: int | None = None
 
     def add_trade(self, ts: int, signed_notional: float) -> None:
         self.trades.append((ts, signed_notional))
@@ -651,6 +659,8 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "asset": key,
         "exchange_symbol": st.symbol,
         "historical_source": st.data_source,
+        "binance_tradfi_feed_active": st.binance_tradfi_stream_active,
+        "binance_tradfi_feed_age_seconds": round((now_ms() - st.binance_tradfi_last_update_ts) / 1000, 1) if st.binance_tradfi_last_update_ts else None,
         "broker_candle_feed": st.broker_candle_feed,
         "broker_candle_age_seconds": round((now_ms() - st.broker_candle_ts) / 1000, 1) if st.broker_candle_ts else None,
         "exchange_price": st.mark_price,
@@ -720,10 +730,16 @@ async def bootstrap_market_data() -> None:
                 loaded = await load_btc_um_history(http_client, state.symbol, HISTORY_BARS)
                 state.data_source = loaded["source"]
             else:
-                # XAUUSD is not a Binance USD-M symbol. Use a separate gold
-                # reference series and keep Vantage MT5 as the broker-price bridge.
-                loaded = await load_gold_history(http_client, HISTORY_BARS)
+                # Binance TradFi Perpetual XAUUSDT is the primary Gold reference.
+                # Yahoo GC=F remains a labelled fallback if the Binance REST host
+                # is unavailable from this deployment region.
+                try:
+                    loaded = await load_binance_tradfi_gold_history(http_client, HISTORY_BARS)
+                except Exception as binance_exc:
+                    log.warning("Binance TradFi GOLD bootstrap unavailable; using GC=F reference fallback: %s", binance_exc)
+                    loaded = await load_gold_history(http_client, HISTORY_BARS)
                 state.data_source = loaded["source"]
+                state.connection_error = None
 
             for tf in TIMEFRAMES:
                 rows = loaded["candles"].get(tf, [])
@@ -765,15 +781,40 @@ async def bootstrap_market_data() -> None:
 
 
 async def gold_market_worker() -> None:
-    """Refresh GOLD reference candles from XAUS; never present them as broker fills."""
+    """Refresh Gold with Binance TradFi data first; use GC=F only before Binance is available."""
     assert http_client is not None
     state = states["GOLD"]
     while True:
         try:
             if state.broker_candle_feed:
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 continue
-            loaded = await load_gold_live(http_client)
+
+            stream_fresh = (
+                state.binance_tradfi_stream_active
+                and state.binance_tradfi_last_update_ts is not None
+                and now_ms() - state.binance_tradfi_last_update_ts <= 20_000
+            )
+            if stream_fresh:
+                state.connection_error = None
+                await asyncio.sleep(10)
+                continue
+
+            source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
+            if source_is_binance:
+                # A stale Binance source must never be silently replaced with GC=F.
+                loaded = await load_binance_tradfi_gold_live(http_client)
+            else:
+                loaded = await load_gold_live(http_client)
+
+            # A WebSocket packet may have arrived while the REST request was in flight.
+            if (
+                state.binance_tradfi_stream_active
+                and state.binance_tradfi_last_update_ts is not None
+                and now_ms() - state.binance_tradfi_last_update_ts <= 20_000
+            ):
+                continue
+
             data = loaded["candles"]
             for tf, rows in data.items():
                 if tf not in state.candles:
@@ -788,17 +829,25 @@ async def gold_market_worker() -> None:
 
             latest = loaded["latest"]
             state.mark_price = float(latest["c"])
-            state.index_price = state.mark_price
+            state.index_price = None if source_is_binance else state.mark_price
             state.mark_ts = int(latest["t"]) + 60_000
             state.exchange_prices.append((state.mark_ts, state.mark_price))
-            state.data_source = "Yahoo Finance COMEX Gold Futures (GC=F); reference only"
+            state.data_source = loaded["source"]
             state.connection_error = None
+            if source_is_binance:
+                state.binance_tradfi_last_update_ts = now_ms()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
-            log.warning("Gold reference feed refresh failed: %s", exc)
-        await asyncio.sleep(60)
+            if "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or ""):
+                state.connection_error = f"Binance XAUUSDT TradFi feed stale; retaining last Binance candles: {str(exc)[:120]}"
+                log.warning("Binance TradFi GOLD refresh failed; keeping last Binance bars: %s", exc)
+            else:
+                state.connection_error = f"Gold reference feed: {str(exc)[:140]}"
+                log.warning("Gold reference feed refresh failed: %s", exc)
+        await asyncio.sleep(30)
+
+
 
 async def market_stream_worker() -> None:
     streams: list[str] = ["!forceOrder@arr"]
@@ -819,7 +868,7 @@ async def market_stream_worker() -> None:
 
     while True:
         try:
-            log.info("Connecting Binance market streams")
+            log.info("Connecting Binance USD-M BTC market streams")
             async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=8_000_000) as ws:
                 states["BTC"].connection_error = None
                 async for raw in ws:
@@ -877,9 +926,87 @@ async def market_stream_worker() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.exception("Market stream disconnected: %s", exc)
+            log.exception("BTC Binance market stream disconnected: %s", exc)
             states["BTC"].connection_error = str(exc)[:180]
             await asyncio.sleep(3)
+
+
+async def gold_tradfi_stream_worker() -> None:
+    """Subscribe separately to Binance XAUUSDT TradFi perpetual continuous klines."""
+    gold_pair = states["GOLD"].symbol.lower()
+    streams = [
+        f"{gold_pair}_tradifi_perpetual@continuousKline_{timeframe}"
+        for timeframe in TIMEFRAMES
+    ]
+    url = MARKET_WS_BASE + "?streams=" + "/".join(streams)
+    state = states["GOLD"]
+
+    while True:
+        try:
+            log.info("Connecting Binance Gold TradFi continuous kline streams: %s", ", ".join(TIMEFRAMES))
+            async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=8_000_000) as ws:
+                async for raw in ws:
+                    packet = json.loads(raw)
+                    data = packet.get("data", packet)
+                    if data.get("e") != "continuous_kline":
+                        continue
+
+                    pair = str(data.get("ps") or "").upper()
+                    contract_type = str(data.get("ct") or "").upper()
+                    if pair != state.symbol or contract_type != "TRADIFI_PERPETUAL":
+                        continue
+
+                    k = data.get("k") or {}
+                    timeframe = str(k.get("i") or "")
+                    price = safe_float(k.get("c"))
+                    event_time = int(data.get("E") or now_ms())
+                    state.binance_tradfi_last_update_ts = now_ms()
+                    state.last_message_ts = now_ms()
+
+                    if state.broker_candle_feed:
+                        # Vantage native XAUUSD broker OHLC remains authoritative.
+                        state.binance_tradfi_stream_active = True
+                        continue
+
+                    if not state.binance_tradfi_stream_active:
+                        # Never mix Yahoo GC=F with XAUUSDT candles.
+                        source_is_binance = "Binance Futures TradFi Perpetual XAUUSDT" in (state.data_source or "")
+                        if not source_is_binance:
+                            for candles in state.candles.values():
+                                candles.clear()
+                            state.latest_analysis.clear()
+                            state.exchange_prices.clear()
+                        state.data_source = "Binance Futures TradFi Perpetual XAUUSDT continuousKline stream"
+
+                    state.binance_tradfi_stream_active = True
+                    state.connection_error = None
+                    if price is not None and price > 0:
+                        state.mark_price = price
+                        state.index_price = None
+                        state.mark_ts = event_time
+                        state.exchange_prices.append((event_time, price))
+
+                    if k.get("x") and timeframe in TIMEFRAMES:
+                        analysis = state.add_candle(timeframe, k)
+                        if analysis and analysis.get("ready"):
+                            if analysis.get("upper_sweep"):
+                                await publish_event(state.key, "UPPER_LIQUIDITY_SWEEP", "Price wicked above recent range high and closed back inside; breakout buyers may be trapped.", analysis.get("last_close"), timeframe)
+                            if analysis.get("lower_sweep"):
+                                await publish_event(state.key, "LOWER_LIQUIDITY_SWEEP", "Price wicked below recent range low and closed back inside; breakout sellers may be trapped.", analysis.get("last_close"), timeframe)
+                            if analysis.get("range_break_down"):
+                                await publish_event(state.key, "BEARISH_RANGE_EXPANSION", "Strong candle closed below the prior range; possible long-stop run / downside expansion.", analysis.get("last_close"), timeframe)
+                            if analysis.get("range_break_up"):
+                                await publish_event(state.key, "BULLISH_RANGE_EXPANSION", "Strong candle closed above the prior range; possible short-stop run / upside expansion.", analysis.get("last_close"), timeframe)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            state.binance_tradfi_stream_active = False
+            if not state.broker_candle_feed:
+                state.connection_error = f"Binance XAUUSDT TradFi stream: {str(exc)[:140]}"
+            log.exception("Gold TradFi continuous-kline stream disconnected: %s", exc)
+            await asyncio.sleep(5)
+
+
 
 
 async def depth_stream_worker() -> None:
@@ -1135,6 +1262,7 @@ async def initialize_market_data_and_workers() -> None:
 
     background_tasks.extend([
         asyncio.create_task(market_stream_worker(), name="binance-market"),
+        asyncio.create_task(gold_tradfi_stream_worker(), name="binance-gold-tradfi"),
         asyncio.create_task(depth_stream_worker(), name="binance-depth"),
         asyncio.create_task(rest_metrics_worker(), name="binance-rest-metrics"),
         asyncio.create_task(gold_market_worker(), name="gold-reference-feed"),
@@ -1187,7 +1315,17 @@ async def health() -> dict[str, Any]:
         "campaign_alerts_enabled": CAMPAIGN_ALERTS_ENABLED,
         "campaign_alert_poll_seconds": CAMPAIGN_ALERT_POLL_SECONDS if CAMPAIGN_ALERTS_ENABLED else None,
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
-        "data_sources": {key: {"source": state.data_source, "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES}, "error": state.connection_error} for key, state in states.items()},
+        "data_sources": {
+            key: {
+                "source": state.data_source,
+                "bars": {tf: len(state.candles[tf]) for tf in TIMEFRAMES},
+                "error": state.connection_error,
+                "binance_tradfi_stream_active": state.binance_tradfi_stream_active,
+                "binance_tradfi_feed_age_seconds": round((now_ms() - state.binance_tradfi_last_update_ts) / 1000, 1) if state.binance_tradfi_last_update_ts else None,
+                "vantage_broker_candles_active": state.broker_candle_feed,
+            }
+            for key, state in states.items()
+        },
     }
 
 
@@ -1439,7 +1577,9 @@ async def config() -> dict[str, Any]:
             "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
             "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
-            "Exchange data is Binance-only; Vantage CFD basis is learned from the user's local Vantage MT5 terminal tick bridge.",
+            "BTC market data uses Binance USD-M; GOLD primary market data uses XAUUSDT TRADIFI_PERPETUAL continuous klines. Yahoo GC=F is a labelled reference fallback only.",
+            "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
+            "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
             "Campaign engine replays completed 1m candles sequentially; higher-timeframe candles are exposed only after their own close timestamp.",
             "1W and 1M context are aggregated from completed daily candles; no incomplete calendar period is used for confirmation.",

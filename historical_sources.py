@@ -14,6 +14,10 @@ import httpx
 log = logging.getLogger("AST-Liquidity-Radar.data")
 
 BINANCE_ARCHIVE = "https://data.binance.vision/data/futures/um"
+BINANCE_FUTURES_REST = "https://fapi.binance.com"
+BINANCE_TRADFI_GOLD_PAIR = "XAUUSDT"
+BINANCE_TRADFI_GOLD_CONTRACT = "TRADIFI_PERPETUAL"
+BINANCE_FUTURES_KLINE_LIMIT = 1500
 YAHOO_CHART_HOSTS = (
     "https://query1.finance.yahoo.com/v8/finance/chart",
     "https://query2.finance.yahoo.com/v8/finance/chart",
@@ -212,6 +216,152 @@ async def load_btc_um_history(
         "source": "Binance USD-M BTCUSDT native timeframe archives (1m fallback resampling)",
         "bars": counts,
     }
+
+def _normalise_binance_continuous_klines(payload: Any, timeframe: str) -> list[dict[str, Any]]:
+    """Normalise Binance USD-M continuous-contract kline tuples, keeping closed bars only."""
+    current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    candles: dict[int, dict[str, Any]] = {}
+    if not isinstance(payload, list):
+        return []
+
+    for row in payload:
+        if not isinstance(row, (list, tuple)) or len(row) < 7:
+            continue
+        try:
+            opened = int(row[0])
+            closed = int(row[6])
+            if opened <= 0 or closed < opened or closed >= current_ms:
+                continue
+            o, h, low, close = (float(row[index]) for index in (1, 2, 3, 4))
+            volume = float(row[5] or 0.0)
+            if min(o, h, low, close) <= 0 or h < max(o, low, close) or low > min(o, h, close):
+                continue
+            candles[opened] = {
+                "t": opened, "o": o, "h": h, "l": low,
+                "c": close, "v": max(0.0, volume),
+            }
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+
+    return [candles[key] for key in sorted(candles)]
+
+
+async def _load_binance_tradfi_gold_interval(
+    client: httpx.AsyncClient,
+    timeframe: str,
+    limit: int,
+    semaphore: asyncio.Semaphore,
+) -> list[dict[str, Any]]:
+    """Page backward through native XAUUSDT TradFi perpetual candles (max 1,500/page)."""
+    wanted = max(1, int(limit))
+    by_time: dict[int, dict[str, Any]] = {}
+    end_time: int | None = None
+
+    async with semaphore:
+        while len(by_time) < wanted:
+            page_limit = min(BINANCE_FUTURES_KLINE_LIMIT, wanted - len(by_time))
+            params: dict[str, Any] = {
+                "pair": BINANCE_TRADFI_GOLD_PAIR,
+                "contractType": BINANCE_TRADFI_GOLD_CONTRACT,
+                "interval": timeframe,
+                "limit": page_limit,
+            }
+            if end_time is not None:
+                params["endTime"] = end_time
+
+            response = await client.get(
+                f"{BINANCE_FUTURES_REST}/fapi/v1/continuousKlines",
+                params=params,
+                timeout=18.0,
+            )
+            response.raise_for_status()
+            raw_rows = response.json()
+            if not isinstance(raw_rows, list) or not raw_rows:
+                break
+
+            page = _normalise_binance_continuous_klines(raw_rows, timeframe)
+            for candle in page:
+                by_time[int(candle["t"])] = candle
+
+            try:
+                oldest_open = min(int(row[0]) for row in raw_rows if isinstance(row, (list, tuple)) and row)
+            except (TypeError, ValueError):
+                break
+            next_end_time = oldest_open - 1
+            if end_time is not None and next_end_time >= end_time:
+                break
+            end_time = next_end_time
+
+            if len(raw_rows) < page_limit:
+                break
+
+    return [by_time[key] for key in sorted(by_time)][-wanted:]
+
+
+async def load_binance_tradfi_gold_history(
+    client: httpx.AsyncClient,
+    limit: int = 25_000,
+) -> dict[str, Any]:
+    """Load native XAUUSDT TradFi perpetual OHLCV for every dashboard timeframe."""
+    limits = {
+        "1m": min(max(1, limit), 25_000),
+        "5m": min(max(1, limit), 1_500),
+        "15m": min(max(1, limit), 1_500),
+        "30m": min(max(1, limit), 1_500),
+        "1h": min(max(1, limit), 1_500),
+        "4h": min(max(1, limit), 1_500),
+        "1d": min(max(1, limit), 1_500),
+    }
+    semaphore = asyncio.Semaphore(3)
+
+    async def fetch_one(timeframe: str, wanted: int) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            rows = await _load_binance_tradfi_gold_interval(client, timeframe, wanted, semaphore)
+            return timeframe, rows
+        except (httpx.HTTPError, ValueError, TypeError, RuntimeError) as exc:
+            log.warning("Binance TradFi GOLD %s history unavailable: %s", timeframe, exc)
+            return timeframe, []
+
+    fetched = await asyncio.gather(*(fetch_one(tf, wanted) for tf, wanted in limits.items()))
+    data = {tf: rows for tf, rows in fetched}
+    if len(data.get("1m", [])) < 25:
+        raise RuntimeError(
+            "Binance XAUUSDT TRADIFI_PERPETUAL returned fewer than 25 closed 1m candles"
+        )
+
+    # Native Binance bars are preferred. Resample only from Binance 1m data
+    # when a particular native interval is unavailable; never mix Yahoo candles.
+    for timeframe in ("5m", "15m", "30m", "1h", "4h", "1d"):
+        if not data.get(timeframe):
+            data[timeframe] = resample_from_1m(data["1m"], timeframe, limits[timeframe])
+
+    counts = {tf: len(rows) for tf, rows in data.items()}
+    log.info("Binance TradFi XAUUSDT history loaded: %s", counts)
+    return {
+        "candles": data,
+        "source": "Binance Futures TradFi Perpetual XAUUSDT continuousKlines (native intervals; Binance 1m resampling fallback)",
+        "bars": counts,
+    }
+
+
+async def load_binance_tradfi_gold_live(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Fetch the latest closed native XAUUSDT TradFi bars when WebSocket is unavailable."""
+    semaphore = asyncio.Semaphore(4)
+    timeframes = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+    fetched = await asyncio.gather(*(
+        _load_binance_tradfi_gold_interval(client, tf, 3, semaphore)
+        for tf in timeframes
+    ))
+    data = {tf: rows for tf, rows in zip(timeframes, fetched)}
+    one_minute = data.get("1m", [])
+    if not one_minute:
+        raise RuntimeError("Binance XAUUSDT TradFi REST refresh returned no closed 1m candles")
+    return {
+        "candles": data,
+        "latest": one_minute[-1],
+        "source": "Binance Futures TradFi Perpetual XAUUSDT continuousKlines",
+    }
+
 
 def _normalise_yahoo_chart(payload: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
     chart = payload.get("chart") or {}
