@@ -721,7 +721,7 @@ function renderCampaigns(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
   if(!assets.length){
-    root.innerHTML='<div class="empty">Campaign engine is waiting for BTC/GOLD 1m candles.</div>';
+    root.innerHTML='<div class="empty">Campaign engine is warming up. Live prices remain connected.</div>';
     return;
   }
   const digitsFor=asset=>asset==='BTC'?1:3;
@@ -746,78 +746,52 @@ function renderCampaigns(payload){
     const execution=a.execution_1m||null;
     const positions=(campaign.positions||[]).filter(p=>p.status==='OPEN');
     const side=execution?.side||campaign.side||alignment.candidate_side||null;
-    const sideKind=side==='BUY'?'good':side==='SELL'?'bad':'neutral';
     const statusText=execution?.status||a.status||'WAITING';
-    const statusKind=statusText.includes('READY')?'good':
-      statusText.includes('ACTIVE')?'good':
+    const statusKind=statusText.includes('READY')||statusText.includes('ACTIVE')?'good':
       statusText.includes('WAITING')?'warn':'neutral';
     const price=a.live_reference_price;
-    const goldBinanceSource=String(a.data_source||'').includes('Binance Futures TradFi Perpetual XAUUSDT');
-    const sourceNote=a.asset==='GOLD'&&!a.broker_candle_feed
-      ? (goldBinanceSource?'Binance XAUUSDT TradFi Perpetual candles are active; historical and live Gold data are Binance-only.':'Waiting for Binance XAUUSDT TradFi Perpetual history/live candles.')
-      : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USDⓈ-M BTCUSDT candles.');
     let cards='';
 
     if(execution && execution.status==='ENTRY READY · NEXT 1M OPEN'){
       cards+='<article class="campaign-position">'
-        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(execution.kind||'ENTRY')+' · 1M '+(execution.side||'')+'</span>'+tag(execution.grade||'SETUP',execution.score>=80?'good':'warn')+'</div>'
+        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(execution.kind||'ENTRY')+' · '+(execution.side||'')+'</span>'+tag(execution.grade||'SETUP',execution.score>=80?'good':'warn')+'</div>'
         +'<div class="campaign-levels">'
-        +renderLevel('Planned entry',execution.entry_price,digits,'entry')
+        +renderLevel('Entry',execution.entry_price,digits,'entry')
         +renderLevel('Stop loss',execution.stop_loss,digits,'stop')
-        +renderLevel('Partial TP · 1R',execution.partial_take_profit,digits,'target')
-        +renderLevel('Final TP · Liquidity',execution.take_profit,digits,'target')
+        +renderLevel('Final TP',execution.take_profit,digits,'target')
+        +renderLevel('Target R',execution.target_r===null||execution.target_r===undefined?'—':n(execution.target_r,2)+'R',digits)
         +'</div>'
-        +'<div class="campaign-meta">Quantity '+(execution.quantity===null||execution.quantity===undefined?'NOT CONFIGURED':n(execution.quantity,5))+' · '+(execution.quantity_status||'')+'</div>'
-        +'<div class="campaign-meta">Score '+n(execution.score,1)+'/100 · Target '+n(execution.target_r,2)+'R · Risk allocation '+n(execution.risk_pct,2)+'%<br>'+execution.execution+'</div>'
+        +'<div class="campaign-meta">Score '+n(execution.score,1)+'/100 · Risk '+n(execution.risk_pct,2)+'% · '+(execution.execution||'Next 1m open after confirmation')+'</div>'
         +'</article>';
     }
     if(positions.length){
       cards+=positions.map((p,index)=>
         '<article class="campaign-position">'
-        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(p.kind||'POSITION')+' · '+p.side+' · #'+(index+1)+'</span>'+tag(p.management||p.status,p.partial_taken?'good':'neutral')+'</div>'
+        +'<div class="campaign-position-head"><span class="campaign-position-title">OPEN '+p.side+' · #'+(index+1)+'</span>'+tag(p.management||p.status,p.partial_taken?'good':'neutral')+'</div>'
         +'<div class="campaign-levels">'
         +renderLevel('Entry',p.entry_price,digits,'entry')
         +renderLevel('Current SL',p.stop_loss,digits,'stop')
-        +renderLevel('Partial TP · 1R',p.partial_take_profit,digits,'target')
         +renderLevel('Final TP',p.take_profit,digits,'target')
+        +renderLevel('Quantity',p.quantity===null||p.quantity===undefined?'Not configured':n(p.quantity,5),digits)
         +'</div>'
-        +'<div class="campaign-meta">Quantity '+(p.quantity===null||p.quantity===undefined?'NOT CONFIGURED':n(p.quantity,5))+' · '+(p.quantity_status||'')+'</div>'
-        +'<div class="campaign-meta">Risk allocation '+n(p.risk_pct,2)+'% · Setup score '+n(p.score,1)+'/100 · '+p.management+'</div>'
+        +'<div class="campaign-meta">Risk '+n(p.risk_pct,2)+'% · '+(p.management||p.status)+'</div>'
         +'</article>'
       ).join('');
     }
     if(!cards){
       cards='<div class="campaign-status-line">'+(a.reason||'Waiting for the next valid 1m setup.')+'</div>';
     }
-
-    const tfHtml=Object.entries(a.higher_timeframes||{}).map(([tf,data])=>{
-      const direction=data?.side||'—';
-      const cls=direction==='BUY'?'buy':direction==='SELL'?'sell':'neutral';
-      return '<span class="campaign-tf '+cls+'">'+tf+' <b>'+direction+'</b></span>';
-    }).join('');
-
-    const riskLine='Campaign risk '+n(campaign.risk_pct||0,2)+'% / '+n(campaign.max_risk_pct||0,2)
-      +'% · Open positions '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10)
-      +' · HTF agreement '+n(alignment.agreement_pct||0,1)+'%';
-    const replay=a.replay||{};
     const performance=a.performance||{};
     const winText=performance.win_rate_pct===null||performance.win_rate_pct===undefined?'—':n(performance.win_rate_pct,1)+'%';
-    const pfText=performance.profit_factor===null||performance.profit_factor===undefined?'—':n(performance.profit_factor,2);
+    const closed=n(performance.closed_positions||0,0);
+    const riskLine='Risk '+n(campaign.risk_pct||0,2)+' / '+n(campaign.max_risk_pct||0,2)+'% · Open '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10);
+
     return '<section class="campaign-asset">'
-      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>1m close/reference: <b data-live-price="'+a.asset+'">'+n(price,digits)+'</b></span><span>HTF bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
+      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>Live price: <b data-live-price="'+a.asset+'">'+n(price,digits)+'</b></span><span>Bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
       +'<div class="campaign-position-grid">'+cards+'</div>'
-      +renderMarketIntelligence(a.market_intelligence,digits)
       +renderLiquidityLevels(a,digits)
-      +'<div class="campaign-meta">Entry Engine: '+((a.entry_engine||{}).status||'WAITING')+
-       ((a.entry_engine||{}).last_candidate?' · '+a.entry_engine.last_candidate.kind+' '+a.entry_engine.last_candidate.side+' · Score '+n(a.entry_engine.last_candidate.score,1)+'/100':'')+'</div>'
-      +'<div class="campaign-foot">Entry filter: '+((a.entry_engine||{}).block_reason||a.reason||'Waiting for market data.')+'</div>'
-      +'<div class="campaign-meta">'+riskLine+'</div>'
-      +'<div class="campaign-tf-row">'+tfHtml+'</div>'
-      +'<div class="campaign-meta">MTF '+(alignment.status||'WAITING')+' · 1m execution '+((alignment.execution_context||{}).status||'UNAVAILABLE')+' · conflicts '+((alignment.conflicting_timeframes||[]).map(x=>x.timeframe+' '+x.side).join(', ')||'none')+'</div>'
-      +'<div class="campaign-foot">'+sourceNote+' Replay: '+n(replay.bars_processed||0,0)+' completed 1m candles · '+(replay.lookahead_safe?'point-in-time replay':'replay status unavailable')+'. Signals are simulated plans, not broker orders.</div>'
-      +'<div class="campaign-foot">Replay metrics: '+n(performance.closed_positions||0,0)+' closed positions · Win rate '+winText+' · Profit factor '+pfText+' · Net '+n(performance.net_r||0,2)+'R · Max DD '+n(performance.max_drawdown_pct_of_equity||0,2)+'% · Fees/slippage excluded.</div>'
-      +'<div class="engine-contract"><span><b>MBIE</b> Market only</span><span><b>MTF</b> Combine only</span><span><b>Entry</b> Main / Add-on only</span><span><b>Campaign</b> Quantity · SL · TP · Risk</span></div>'
-      +(campaign.can_add_position?'':campaign.status==='ACTIVE'?'<div class="campaign-foot">Add-on entries are blocked until all open stops are breakeven or better, fresh favorable extension is confirmed and total risk is within limit.</div>':'')
+      +'<div class="campaign-meta">'+riskLine+' · Closed '+closed+' · Win rate '+winText+' · Net '+n(performance.net_r||0,2)+'R</div>'
+      +'<div class="campaign-foot">Analysis refreshes on completed candles. Plans are simulated; no broker orders are sent.</div>'
       +'</section>';
   }).join('');
 }
