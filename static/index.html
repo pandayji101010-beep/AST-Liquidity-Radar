@@ -680,14 +680,14 @@ function renderLiquidityLevels(asset,digits){
       const isScalp=layer==='scalp';
       const sideLabel=side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓';
       if(!level){
-        const waitText=isScalp?'No separate micro pool in 100–500 pip band (swing levels excluded)':'Waiting for untouched swing liquidity';
+        const waitText=isScalp?'No separate micro pool at 90+ pips (swing levels excluded)':'Waiting for untouched swing liquidity';
         return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>—</strong><small>'+waitText+'</small></div>';
       }
       const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
       const distPct=level.distance_pct!==null&&level.distance_pct!==undefined?Number(level.distance_pct):ref>0?distance/ref*100:0;
       const detail=isScalp
         ? n(level.distance_pips,1)+' pips away · '+(level.label||'MICRO POOL')
-        : n(distance,digits)+' away · '+n(distPct,3)+'% · '+(level.label||'ACTIVE SWING POOL');
+        : n(distance/(String(asset.asset||'BTC').toUpperCase()==='GOLD'?0.01:1.0),1)+' pips away · '+(level.label||'ACTIVE SWING POOL');
       return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>'+n(level.price,digits)+'</strong><small>'+detail+'</small></div>';
     };
     const cleared=pools.last_cleared||{};
@@ -706,14 +706,14 @@ function renderLiquidityLevels(asset,digits){
       +'<div class="liquidity-layer-label">SWING LIQUIDITY · STRUCTURE POOLS</div>'
       +sideHtml(buy,'buy','swing')+sideHtml(sell,'sell','swing')
       +'<div class="liquidity-cleared">'+(clearText?'Swing cleared · '+clearText:'Swing cleared · None recorded')+'</div>'
-      +'<div class="liquidity-layer-label scalp">SCALPING LIQUIDITY · 100–500 PIPS</div>'
+      +'<div class="liquidity-layer-label scalp">SCALPING LIQUIDITY · 90+ PIPS</div>'
       +sideHtml(scalp.buy_side||null,'buy','scalp')+sideHtml(scalp.sell_side||null,'sell','scalp')
       +'<div class="liquidity-cleared scalp-clear">'+(scalpClearText?'Scalp cleared · '+scalpClearText:'Scalp cleared · None recorded')+'</div>'
       +'</article>';
   }).join('');
   return '<section class="liquidity-panel">'
     +'<div class="liquidity-panel-head"><div class="liquidity-panel-title">ACTIVE LIQUIDITY · ALL TIMEFRAMES</div>'+tag('SWING + SCALPING · SEPARATE LOCKS','neutral')+'</div>'
-    +'<div class="liquidity-panel-note">Swing pools remain unchanged. Scalp pools seed from confirmed micro highs/lows 100–500 pips away (BTC: $1/pip; GOLD: $0.01/pip), then stay locked until that same timeframe sweeps or breaks them. A replacement activates only on the next completed candle.</div>'
+    +'<div class="liquidity-panel-note">Swing pools remain unchanged. Scalp pools seed from confirmed micro highs/lows at least 90 pips away, with no maximum distance (BTC: $1/pip; GOLD: $0.01/pip). They stay locked until that same timeframe sweeps or breaks them. A replacement activates only on the next completed candle.</div>'
     +'<div class="liquidity-grid">'+frameRows+'</div>'
     +'</section>';
 }
