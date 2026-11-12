@@ -42,6 +42,38 @@ def _previous_months(now: datetime, count: int = 2) -> list[datetime]:
     return months
 
 
+def _parse_archive_bytes(content: bytes) -> list[dict[str, Any]]:
+    """Decompress and parse one Binance archive without blocking the event loop."""
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        csv_name = next((name for name in archive.namelist() if name.lower().endswith(".csv")), None)
+        if not csv_name:
+            return []
+        rows: list[dict[str, Any]] = []
+        current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        with archive.open(csv_name) as raw:
+            wrapper = io.TextIOWrapper(raw, encoding="utf-8", newline="")
+            for row in csv.reader(wrapper):
+                if len(row) < 7:
+                    continue
+                try:
+                    opened = int(row[0])
+                    closed = int(row[6])
+                    if closed >= current_ms:
+                        continue
+                    rows.append({
+                        "t": opened,
+                        "o": float(row[1]),
+                        "h": float(row[2]),
+                        "l": float(row[3]),
+                        "c": float(row[4]),
+                        "v": float(row[5]),
+                    })
+                except (TypeError, ValueError, IndexError):
+                    # Skip a possible CSV header or malformed row.
+                    continue
+        return rows
+
+
 async def _download_archive(client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
     async with semaphore:
         try:
@@ -49,33 +81,9 @@ async def _download_archive(client: httpx.AsyncClient, url: str, semaphore: asyn
             if response.status_code == 404:
                 return []
             response.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-                csv_name = next((name for name in archive.namelist() if name.lower().endswith(".csv")), None)
-                if not csv_name:
-                    return []
-                rows = []
-                with archive.open(csv_name) as raw:
-                    wrapper = io.TextIOWrapper(raw, encoding="utf-8", newline="")
-                    for row in csv.reader(wrapper):
-                        if len(row) < 7:
-                            continue
-                        try:
-                            opened = int(row[0])
-                            closed = int(row[6])
-                            candle = {
-                                "t": opened,
-                                "o": float(row[1]),
-                                "h": float(row[2]),
-                                "l": float(row[3]),
-                                "c": float(row[4]),
-                                "v": float(row[5]),
-                            }
-                            if closed < int(datetime.now(timezone.utc).timestamp() * 1000):
-                                rows.append(candle)
-                        except (TypeError, ValueError, IndexError):
-                            # Skip a possible CSV header or malformed row.
-                            continue
-                return rows
+            # ZIP decompression + tens of thousands of CSV rows can hold the
+            # Python event loop long enough to miss Render's 5s HTTP healthcheck.
+            return await asyncio.to_thread(_parse_archive_bytes, response.content)
         except (httpx.HTTPError, zipfile.BadZipFile, OSError) as exc:
             log.warning("Historical archive unavailable (%s): %s", url, exc)
             return []
