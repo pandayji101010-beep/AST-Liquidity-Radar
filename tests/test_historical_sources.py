@@ -12,6 +12,35 @@ from historical_sources import (
 
 
 class HistoricalSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_binance_archive_is_used_when_continuous_rest_is_blocked(self):
+        now_ms = int(time.time() * 1000)
+        start = ((now_ms - 27 * 86_400_000) // 86_400_000) * 86_400_000
+        minute_rows = [
+            {"t": start + index * 60_000, "o": 2350.0, "h": 2352.0,
+             "l": 2349.0, "c": 2351.0, "v": 1.0}
+            for index in range(26 * 24 * 60)
+        ]
+        archive_payload = {
+            "candles": {
+                "1m": minute_rows[-25_000:],
+                "5m": [], "15m": [], "30m": [], "1h": [], "4h": [], "1d": [],
+            },
+            "source": "Binance Futures TradFi Perpetual XAUUSDT public archive",
+            "bars": {"1m": min(len(minute_rows), 25_000)},
+        }
+
+        async def no_rest(*args, **kwargs):
+            return []
+
+        with patch("historical_sources._load_binance_tradfi_gold_interval", new=AsyncMock(side_effect=no_rest)), patch(
+            "historical_sources._load_binance_tradfi_gold_archive",
+            new=AsyncMock(return_value=archive_payload),
+        ) as archive:
+            result = await load_binance_tradfi_gold_history(object(), limit=25_000)
+        archive.assert_awaited_once()
+        self.assertIn("Binance Futures TradFi Perpetual XAUUSDT public archive", result["source"])
+        self.assertEqual(result["bars"]["1m"], 25_000)
+
     def test_binance_tradfi_continuous_klines_keep_only_valid_closed_xauusdt_bars(self):
         now_ms = int(time.time() * 1000)
         closed_open = ((now_ms - 180_000) // 60_000) * 60_000
