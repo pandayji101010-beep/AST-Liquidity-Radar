@@ -302,7 +302,7 @@ class FourEngineArchitectureTests(unittest.TestCase):
             max_active_distance_pips=None, pip_size=1.0,
         )
         self.assertEqual(still_locked["buy_side"]["price"], 1300.0)
-        self.assertEqual(still_locked["buy_side"]["distance_pips"], 510.0)
+        self.assertEqual(still_locked["buy_side"]["distance_points"], 510.0)
         self.assertIsNone(still_locked["last_cleared"]["buy_side"])
 
     def test_persistent_liquidity_state_is_separate_for_each_timeframe(self):
