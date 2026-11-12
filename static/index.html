@@ -684,7 +684,6 @@ function renderLiquidityLevels(asset,digits){
         return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>—</strong><small>'+waitText+'</small></div>';
       }
       const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
-      const distPct=level.distance_pct!==null&&level.distance_pct!==undefined?Number(level.distance_pct):ref>0?distance/ref*100:0;
       const detail=isScalp
         ? n(level.distance_pips,1)+' pips away · '+(level.label||'MICRO POOL')
         : n(distance/(String(asset.asset||'BTC').toUpperCase()==='GOLD'?0.01:1.0),1)+' pips away · '+(level.label||'ACTIVE SWING POOL');
