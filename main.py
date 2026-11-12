@@ -536,7 +536,7 @@ def adjusted_price(st: AssetState, exchange_price: float | None) -> float | None
     if exchange_price is None:
         return None
     # Direct Vantage GOLD candles are already in the broker's XAUUSD price
-    # scale, so do not apply a synthetic COMEX-to-CFD basis ratio.
+    # scale.
     if st.key == "GOLD" and st.broker_candle_feed:
         if st.broker_candle_ts is None or now_ms() - st.broker_candle_ts > 90_000:
             return None
@@ -1569,7 +1569,7 @@ async def config() -> dict[str, Any]:
             "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
             "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
-            "BTC market data uses Binance USD-M; GOLD primary market data uses XAUUSDT TRADIFI_PERPETUAL continuous klines. Yahoo GC=F is a labelled reference fallback only.",
+            "BTC market data uses Binance USD-M; GOLD historical and live market data use Binance XAUUSDT TRADIFI_PERPETUAL only.",
             "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
             "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
