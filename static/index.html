@@ -541,7 +541,7 @@ body{
     </div>
     <div id="campaignSignals" class="campaign-assets"><div class="empty">Loading multi-timeframe campaign analysis…</div></div>
   </section>
-  <div class="footer">BTC analysis uses Binance USD-M Futures candles. GOLD uses direct Vantage MT5 XAUUSD broker candles when connected; otherwise it uses a COMEX gold futures reference. The campaign engine replays completed 1m candles sequentially and exposes simulated entries at the next 1m open after confirmation. Dashboard plans do not place broker orders. Replay fees and slippage are excluded; lot sizing requires account equity and broker contract/tick-value settings.</div>
+  <div class="footer">BTC analysis uses Binance USD-M Futures candles. GOLD strategy history and live reference use Binance XAUUSDT TradFi Perpetual candles only. Vantage MT5 is an optional separate broker feed and is not used as a Gold historical fallback. The campaign engine replays completed 1m candles sequentially and exposes simulated entries at the next 1m open after confirmation. Dashboard plans do not place broker orders. Replay fees and slippage are excluded; lot sizing requires account equity and broker contract/tick-value settings.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -754,7 +754,7 @@ function renderCampaigns(payload){
     const price=a.live_reference_price;
     const goldBinanceSource=String(a.data_source||'').includes('Binance Futures TradFi Perpetual XAUUSDT');
     const sourceNote=a.asset==='GOLD'&&!a.broker_candle_feed
-      ? (goldBinanceSource?'Binance XAUUSDT TradFi Perpetual candles are active; Vantage XAUUSD broker OHLC bridge is separate and not connected.':'Yahoo GC=F reference candles are active; Vantage XAUUSD broker OHLC bridge is not connected.')
+      ? (goldBinanceSource?'Binance XAUUSDT TradFi Perpetual candles are active; historical and live Gold data are Binance-only.':'Waiting for Binance XAUUSDT TradFi Perpetual history/live candles.')
       : (a.asset==='GOLD'?'Direct Vantage MT5 broker OHLC feed.':'Binance USDⓈ-M BTCUSDT candles.');
     let cards='';
 
