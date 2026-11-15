@@ -135,8 +135,7 @@ def _confirmed_swings(candles: list[dict[str, Any]], left: int = 2, right: int =
         if highs[j] == max(high_window) and highs[j] > highs[j - 1] and highs[j] >= highs[j + 1]:
             pivot_highs.append((j, highs[j]))
         if lows[j] == min(low_window) and lows[j] < lows[j - 1] and lows[j] <= lows[j + 1]:
-            pivot_lows.append((j, lows[j])
-            )
+            pivot_lows.append((j, lows[j]))
     return pivot_highs, pivot_lows
 
 
@@ -411,7 +410,8 @@ class AdvancedMultiStrategyEngine:
         result: dict[str, list[dict[str, Any]]] = {}
         for tf, rows in data.items():
             end = bisect.bisect_right(opens[tf], close_time - TIMEFRAME_MS[tf]) if rows else 0
-            result[tf] = rows[:end]
+            # Signal helpers need only a bounded recent window; avoid copying up to 25k bars for every 1m replay step.
+            result[tf] = rows[max(0, end - 260):end]
         return result
 
     def _waiting_result(self, combination: str, status: str, reason: str, stages: dict[str, Any], higher: list[dict[str, Any]], entry: dict[str, Any] | None = None) -> dict[str, Any]:
