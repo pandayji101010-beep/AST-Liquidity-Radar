@@ -1,88 +1,124 @@
 from __future__ import annotations
 
-import random
 import unittest
 
-from advanced_multi_strategy import AdvancedMultiStrategyEngine, MIN_BARS, TIMEFRAME_ORDER
+from advanced_multi_strategy import (
+    AdvancedMultiStrategyEngine, COMBINATIONS, MIN_BARS, TIMEFRAME_MS,
+    TIMEFRAME_ORDER, _clean_candles, _confirmed_swings, _summary, _trend_state,
+)
 
 
-def bars(count: int = 900):
-    rng = random.Random(7)
+def candles(count, interval=60_000, drift=1.0):
     rows = []
-    price = 30_000.0
+    price = 100.0
     for i in range(count):
-        drift = 0.12 if (i // 120) % 2 == 0 else -0.12
-        op = price
-        close = max(100.0, price + drift + rng.uniform(-7.0, 7.0))
-        high = max(op, close) + rng.uniform(0.5, 4.0)
-        low = min(op, close) - rng.uniform(0.5, 4.0)
-        rows.append({"t": i * 60_000, "o": op, "h": high, "l": low, "c": close, "v": 100 + rng.uniform(0, 100)})
+        op, close = price, price + drift
+        rows.append({
+            "t": (i + 1) * interval, "o": op, "h": max(op, close) + 0.15,
+            "l": min(op, close) - 0.15, "c": close, "v": 100.0,
+        })
         price = close
     return rows
 
 
-class AdvancedMultiStrategyTests(unittest.TestCase):
+class AST915EMATests(unittest.TestCase):
     def setUp(self):
         self.engine = AdvancedMultiStrategyEngine("BTC")
-        self.data = bars()
 
-    def test_warmup_does_not_emit_signal(self):
-        result = self.engine.evaluate(self.data[:MIN_BARS - 1])
-        self.assertIsNone(result.side)
-        self.assertEqual(result.status, "WARMING UP")
+    def test_warmup_reports_insufficient_history(self):
+        state = _trend_state(candles(MIN_BARS - 1))
+        self.assertFalse(state["ready"])
+        self.assertEqual(state["direction"], "INSUFFICIENT DATA")
 
-    def test_all_six_engines_are_reported(self):
-        result = self.engine.evaluate(self.data)
-        self.assertEqual(set(result.engines), {"trend", "liquidity", "breakout", "range", "momentum", "price_action"})
+    def test_strong_rising_and_falling_trends(self):
+        self.assertEqual(_trend_state(candles(200, drift=1.0))["direction"], "BULLISH")
+        self.assertEqual(_trend_state(candles(200, drift=-0.5))["direction"], "BEARISH")
 
-    def test_future_candles_do_not_change_past_evaluation(self):
-        index = 600
-        past_only = self.engine.evaluate(self.data[:index + 1])
-        using_full_series = self.engine.evaluate(self.data, index)
-        self.assertEqual(past_only.side, using_full_series.side)
-        self.assertEqual(past_only.engines, using_full_series.engines)
-        self.assertEqual(past_only.stop_anchor, using_full_series.stop_anchor)
+    def test_flat_market_is_not_directional(self):
+        rows = []
+        for i in range(200):
+            close = 100 + (0.02 if i % 2 else -0.02)
+            rows.append({"t": i * 60_000, "o": close, "h": 100.10, "l": 99.90, "c": close, "v": 100})
+        state = _trend_state(rows)
+        self.assertEqual(state["direction"], "FLAT")
+        self.assertEqual(state["strength"], "WEAK")
 
-    def test_same_candle_stop_and_target_assumes_stop_first(self):
-        candle = [{"t": 60_000, "o": 100.0, "h": 103.0, "l": 98.0, "c": 101.0, "v": 10.0}]
-        trade = self.engine._simulate_trade(candle, 0, "BUY", 100.0, 99.0, 0, "1m", "BTC")
-        self.assertIsNotNone(trade)
+    def test_three_required_combinations_exist(self):
+        self.assertEqual(set(COMBINATIONS), {"A", "B", "C"})
+        self.assertEqual(COMBINATIONS["A"]["higher"], ("4h", "1h"))
+        self.assertEqual(COMBINATIONS["B"]["higher"], ("1h",))
+        self.assertEqual(COMBINATIONS["C"]["higher"], ("15m",))
+        self.assertEqual(TIMEFRAME_ORDER, ("1m", "5m", "15m", "30m", "1h", "4h", "1d"))
+
+    def test_asof_excludes_unclosed_higher_timeframe_bar(self):
+        data = {
+            "1m": candles(5),
+            "4h": [
+                {"t": i * TIMEFRAME_MS["4h"], "o": 100 + i, "h": 101 + i, "l": 99 + i, "c": 100.5 + i, "v": 1}
+                for i in range(3)
+            ],
+        }
+        opens = {tf: [int(x["t"]) for x in rows] for tf, rows in data.items()}
+        before = self.engine._asof(data, opens, TIMEFRAME_MS["4h"] - 1)
+        closed = self.engine._asof(data, opens, TIMEFRAME_MS["4h"])
+        self.assertEqual(len(before["4h"]), 0)
+        self.assertEqual(len(closed["4h"]), 1)
+        self.assertEqual(len(closed["1m"]), 5)
+
+    def test_swings_require_right_side_confirmation_bars(self):
+        values = [(11, 9), (12, 8), (15, 7), (12, 8), (11, 9), (10, 10), (11, 9)]
+        rows = [{"t": i * 60_000, "o": 10, "h": h, "l": low, "c": 10, "v": 1} for i, (h, low) in enumerate(values)]
+        highs, _ = _confirmed_swings(rows, left=2, right=2)
+        self.assertIn((2, 15), highs)
+        earlier, _ = _confirmed_swings(rows[:4], left=2, right=2)
+        self.assertFalse(any(index == 2 for index, _ in earlier))
+
+    def test_same_candle_stop_and_target_counts_as_loss(self):
+        bars = [{"t": 60_000, "o": 100, "h": 103, "l": 98, "c": 101, "v": 10}]
+        trade = self.engine._simulate_trade(bars, 0, "BUY", 100, 99, 0, "A")
         self.assertEqual(trade["result"], "LOSS")
-        self.assertEqual(trade["exit_reason"], "SL_FIRST_SAME_CANDLE")
         self.assertEqual(trade["result_r"], -1.0)
 
-    def test_live_plan_uses_two_r_target(self):
-        plan = self.engine._plan("BUY", 100.0, 99.0, 123, "1m")
-        self.assertEqual(plan["risk_reward"], 2.0)
-        self.assertEqual(plan["take_profit"], 102.0)
-
-    def test_gap_exit_keeps_fixed_strategy_r_and_records_realized_price_r(self):
-        candle = [
-            {"t": 60_000, "o": 100.0, "h": 101.0, "l": 99.5, "c": 100.5, "v": 10.0},
-            {"t": 120_000, "o": 103.0, "h": 104.0, "l": 102.5, "c": 103.5, "v": 10.0},
+    def test_take_profit_is_two_r(self):
+        bars = [
+            {"t": 60_000, "o": 100, "h": 100.5, "l": 99.5, "c": 100.2, "v": 10},
+            {"t": 120_000, "o": 100.2, "h": 102.1, "l": 100.1, "c": 102, "v": 10},
         ]
-        trade = self.engine._simulate_trade(candle, 0, "BUY", 100.0, 99.0, 0, "1m", "BTC")
+        trade = self.engine._simulate_trade(bars, 0, "BUY", 100, 99, 0, "B")
         self.assertEqual(trade["result"], "WIN")
+        self.assertEqual(trade["take_profit"], 102.0)
         self.assertEqual(trade["result_r"], 2.0)
-        self.assertEqual(trade["realized_price_r"], 3.0)
 
-    def test_backtest_is_repeatable_and_reports_required_metrics(self):
-        first = self.engine.backtest(self.data, "1m")
-        second = self.engine.backtest(self.data, "1m")
-        self.assertEqual(first["trades"], second["trades"])
-        for field in (
-            "total_historical_trades", "total_winning_trades", "total_losing_trades",
-            "win_rate_pct", "loss_rate_pct", "actual_risk_reward_ratio",
-            "total_winning_r", "total_losing_r", "net_profit_loss_r",
-            "maximum_drawdown_r", "maximum_consecutive_wins",
-            "maximum_consecutive_losses", "profit_factor", "costs",
-        ):
-            self.assertIn(field, first)
-        ids = [trade["trade_id"] for trade in first["trades"]]
-        self.assertEqual(len(ids), len(set(ids)))
+    def test_summary_calculates_win_rate_rr_and_net_r(self):
+        trades = [
+            {"result": "WIN", "result_r": 2, "net_result_r": 2},
+            {"result": "WIN", "result_r": 2, "net_result_r": 2},
+            {"result": "LOSS", "result_r": -1, "net_result_r": -1},
+        ]
+        result = _summary(trades, 100)
+        self.assertEqual(result["total_trades"], 3)
+        self.assertAlmostEqual(result["win_rate_pct"], 66.67, places=2)
+        self.assertEqual(result["actual_average_rr"], 2.0)
+        self.assertEqual(result["gross_net_r"], 3.0)
+        self.assertEqual(result["net_profit_loss_r"], 3.0)
+        self.assertEqual(result["break_even_trades"], 0)
 
-    def test_supported_timeframes_are_the_requested_seven(self):
-        self.assertEqual(TIMEFRAME_ORDER, ("1m", "5m", "15m", "30m", "1h", "4h", "1d"))
+    def test_backtest_ids_are_limited_to_combinations(self):
+        self.assertEqual(self.engine.historical_trades("A")["combination"], "A")
+        self.assertEqual(self.engine.historical_trades("1m")["status"], "INSUFFICIENT DATA")
+
+    def test_empty_data_returns_insufficient_status(self):
+        result = self.engine._evaluate_combination({tf: [] for tf in TIMEFRAME_ORDER}, "A")
+        self.assertEqual(result["status"], "INSUFFICIENT DATA")
+        self.assertIsNone(result["side"])
+
+    def test_candle_cleanup_keeps_latest_duplicate_timestamp(self):
+        rows = candles(3)
+        updated_close = rows[-1]["c"] + 0.1
+        rows.append({**rows[-1], "h": rows[-1]["h"] + 0.1, "c": updated_close})
+        cleaned = _clean_candles(rows)
+        self.assertEqual(len(cleaned), 3)
+        self.assertAlmostEqual(cleaned[-1]["c"], updated_close)
 
 
 if __name__ == "__main__":
