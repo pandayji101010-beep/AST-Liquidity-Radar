@@ -14,7 +14,7 @@ def candles(count, interval=60_000, drift=1.0):
     for i in range(count):
         op, close = price, price + drift
         rows.append({
-            "t": i * interval, "o": op, "h": max(op, close) + 0.15,
+            "t": (i + 1) * interval, "o": op, "h": max(op, close) + 0.15,
             "l": min(op, close) - 0.15, "c": close, "v": 100.0,
         })
         price = close
