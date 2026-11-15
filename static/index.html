@@ -808,9 +808,14 @@ function renderAdvancedStrategy(payload){
         +'<td>'+statCell(p.total_winning_trades,0)+'</td>'
         +'<td>'+statCell(p.total_losing_trades,0)+'</td>'
         +'<td>'+(p.win_rate_pct===null||p.win_rate_pct===undefined?'—':n(p.win_rate_pct,2)+'%')+'</td>'
+        +'<td>'+(p.loss_rate_pct===null||p.loss_rate_pct===undefined?'—':n(p.loss_rate_pct,2)+'%')+'</td>'
         +'<td>'+statCell(p.actual_risk_reward_ratio,2)+'</td>'
+        +'<td>'+statCell(p.total_winning_r,2)+'R</td>'
+        +'<td>'+statCell(p.total_losing_r,2)+'R</td>'
         +'<td>'+statCell(p.net_profit_loss_r,2)+'R</td>'
         +'<td>'+statCell(p.maximum_drawdown_r,2)+'R</td>'
+        +'<td>'+statCell(p.maximum_consecutive_wins,0)+'</td>'
+        +'<td>'+statCell(p.maximum_consecutive_losses,0)+'</td>'
         +'<td>'+statCell(p.profit_factor,2)+'</td>'
         +'</tr>';
     }).join('');
@@ -824,7 +829,7 @@ function renderAdvancedStrategy(payload){
       +'<div class="six-section-title">LIVE ENGINE CONFIRMATIONS · ALL TIMEFRAMES</div>'
       +'<div class="six-tf-grid">'+tfHtml+'</div>'
       +'<div class="six-section-title">HISTORICAL PERFORMANCE · COMPLETED CANDLES ONLY</div>'
-      +'<div class="six-table-wrap"><table class="six-stats"><thead><tr><th>Timeframe</th><th>Bars</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Actual RR</th><th>Net R</th><th>Max DD</th><th>Profit Factor</th></tr></thead><tbody>'+statsRows+'</tbody></table></div>'
+      +'<div class="six-table-wrap"><table class="six-stats"><thead><tr><th>Timeframe</th><th>Bars</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Loss Rate</th><th>Actual RR</th><th>Winning R</th><th>Losing R</th><th>Net R</th><th>Max DD</th><th>Max Win Streak</th><th>Max Loss Streak</th><th>Profit Factor</th></tr></thead><tbody>'+statsRows+'</tbody></table></div>'
       +'<div class="six-note">Full trade logs are available from each timeframe’s Trades link. Maximum consecutive wins/losses and gross winning/losing R are included in the returned backtest report. '+esc(stats['1m']?.costs?.reason||'Historical transaction costs may be unavailable.')+'</div>'
       +'<div class="six-asset-meta">1m final decision: '+esc(one.reason||'Waiting for a completed candle')+'</div>'
       +'</section>';
