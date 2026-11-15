@@ -114,10 +114,11 @@ class AST915EMATests(unittest.TestCase):
 
     def test_candle_cleanup_keeps_latest_duplicate_timestamp(self):
         rows = candles(3)
-        rows.append({**rows[-1], "h": rows[-1]["h"] + 0.1, "c": rows[-1]["c"] + 0.1})
+        updated_close = rows[-1]["c"] + 0.1
+        rows.append({**rows[-1], "h": rows[-1]["h"] + 0.1, "c": updated_close})
         cleaned = _clean_candles(rows)
         self.assertEqual(len(cleaned), 3)
-        self.assertAlmostEqual(cleaned[-1]["c"], rows[-1]["c"] + 0.1)
+        self.assertAlmostEqual(cleaned[-1]["c"], updated_close)
 
 
 if __name__ == "__main__":
