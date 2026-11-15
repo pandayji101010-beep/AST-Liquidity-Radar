@@ -538,312 +538,92 @@ body{
   #notificationStatus{flex-basis:100%;justify-content:flex-end;font-size:10px}
 }
 .campaign-live-prices{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.campaign-live-price{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12px}.campaign-live-price b{font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.campaign-live-price span{color:var(--muted);font-size:10px;letter-spacing:.06em}.campaign-live-price .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 7px var(--green)}@media(max-width:680px){.campaign-live-prices{justify-content:flex-start;margin-top:8px}.campaign-live-price{padding:6px 8px}}
-/* Advanced six-engine strategy board */
-.six-assets{display:grid;gap:14px;margin-top:14px}
-.six-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
-.six-asset-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
-.six-asset-name{font-size:15px;font-weight:900;letter-spacing:.07em}
-.six-asset-meta{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.5}
-.six-plan{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
-.six-plan-cell{background:#0c1825;border:1px solid #26384b;border-radius:9px;padding:9px;min-width:0}
-.six-plan-cell .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.six-plan-cell .v{font-size:15px;font-weight:850;font-variant-numeric:tabular-nums;margin-top:4px;overflow-wrap:anywhere}
-.six-plan-cell.entry .v{color:var(--cyan)}.six-plan-cell.stop .v{color:var(--red)}.six-plan-cell.target .v{color:var(--green)}
-.six-tf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
-.six-tf-card{background:#0c1825;border:1px solid #26384b;border-radius:10px;padding:10px;min-width:0}
-.six-tf-head{display:flex;justify-content:space-between;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:8px}
-.six-tf-head b{font-size:12px;letter-spacing:.06em}
-.six-engine-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-.six-engine{border:1px solid #203247;border-radius:8px;padding:7px;min-width:0;background:#0a131e}
-.six-engine-title{font-size:9px;font-weight:850;color:#b9c9d8;letter-spacing:.04em;text-transform:uppercase}
-.six-engine-dir{font-size:10px;font-weight:900;margin-top:4px}
-.six-engine-dir.buy{color:var(--green)}.six-engine-dir.sell{color:var(--red)}.six-engine-dir.neutral{color:var(--amber)}
-.six-engine-reason{font-size:9px;color:var(--muted);line-height:1.45;margin-top:4px;overflow-wrap:anywhere}
-.six-tf-plan{font-size:10px;color:var(--muted);line-height:1.5;margin-top:8px}
-.six-section-title{font-size:11px;font-weight:900;letter-spacing:.07em;color:#c5d5e4;margin:17px 0 8px}
-.six-table-wrap{overflow-x:auto;border:1px solid #26384b;border-radius:10px}
-.six-stats{width:100%;border-collapse:collapse;min-width:850px;font-size:10px}
-.six-stats th,.six-stats td{padding:8px 9px;border-bottom:1px solid #203247;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.six-stats th:first-child,.six-stats td:first-child{text-align:left}
-.six-stats th{background:#101d2b;color:#b8c9d8;font-size:9px;text-transform:uppercase;letter-spacing:.04em}
-.six-stats tr:last-child td{border-bottom:0}
-.six-stats a{color:var(--cyan);text-decoration:none}
-.six-note{font-size:10px;color:var(--muted);line-height:1.55;margin-top:9px}
-.six-waiting{background:#0c1825;border:1px dashed #31465d;border-radius:9px;padding:11px;color:var(--muted);font-size:11px;line-height:1.5}
-@media(max-width:700px){.six-plan{grid-template-columns:repeat(2,minmax(0,1fr))}.six-tf-grid{grid-template-columns:1fr}.six-asset{padding:10px}}
-
+/* AST high-confidence levels board */
+.levels-assets{display:grid;gap:14px;margin-top:14px}
+.levels-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
+.levels-asset-title{font-size:15px;font-weight:900;letter-spacing:.06em;color:#eef4f9;margin-bottom:12px}
+.levels-head,.levels-row{display:grid;grid-template-columns:54px minmax(110px,1.1fr) minmax(120px,1.4fr) minmax(110px,1.25fr) minmax(100px,1fr) 100px;gap:8px;align-items:center}
+.levels-head{padding:0 10px 8px;color:#92a7bb;font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}
+.levels-row{padding:10px;margin-top:6px;border:1px solid #26384b;border-radius:10px;background:#0c1825}
+.levels-cell{min-width:0}
+.levels-label{display:none;font-size:9px;color:#92a7bb;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.levels-value{font-size:12px;font-weight:800;color:#eaf2f8;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.levels-value.support{color:var(--green)}
+.levels-value.resistance{color:var(--red)}
+.levels-value.score{color:#f1d18c}
+.levels-status{display:inline-flex;justify-content:center;min-width:68px;padding:6px 8px;border-radius:7px;font-size:10px;font-weight:900;letter-spacing:.04em;background:#152436;color:#dce8f2;border:1px solid #32485f}
+.levels-status.buy{background:#102b22;border-color:#286749;color:#7be0a8}
+.levels-status.sell{background:#321b20;border-color:#7b343e;color:#ff9ca4}
+.levels-status.waiting{background:#25271f;border-color:#5a5333;color:#e7cf87}
+.levels-empty{padding:18px 12px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6;border:1px dashed #31465d;border-radius:10px;background:#0c1825}
+.levels-footer{font-size:10px;color:var(--muted);line-height:1.6;margin-top:12px;text-align:center}
+@media(max-width:700px){
+ .levels-asset{padding:10px}
+ .levels-head{display:none}
+ .levels-row{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 10px;padding:10px}
+ .levels-label{display:block}
+ .levels-value{font-size:12px}
+ .levels-cell:last-child{grid-column:1/-1}
+ .levels-status{width:100%;min-height:32px}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="brand"><div class="mark">AST</div><div><h1>AST FOUR-ENGINE CAMPAIGN</h1><div class="sub" id="sourceSubtitle">MBIE → Multi-Timeframe → Entry → Campaign · BTC + GOLD</div></div></div>
-    <div class="controls">
-      <div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting campaign engine…</span></div>
-      <label for="refreshInterval" class="auto-refresh-label">AUTO</label>
-      <select id="refreshInterval" aria-label="Auto refresh interval">
-        <option value="100" selected>0.1 sec · live price</option><option value="1000">1 sec</option><option value="2000">2 sec</option><option value="5000">5 sec</option>
-      </select>
-      <button type="button" id="refreshToggle" class="auto-refresh-toggle" aria-pressed="false">Pause</button>
-      <span id="notificationStatus" class="status" title="Telegram campaign notifications status">Telegram alerts: checking…</span>
+    <div class="brand">
+      <div class="mark">AST</div>
+      <div><h1>HIGH-CONFIDENCE MARKET LEVELS</h1><div class="sub">BTC + GOLD · SUPPORT & RESISTANCE</div></div>
     </div>
+    <div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting to live market feed…</span></div>
   </div>
 
   <section class="card full" id="strategySection">
     <div class="head">
-      <div><div class="asset">ADVANCED MULTI-STRATEGY SYSTEM</div><div class="sub">TREND · LIQUIDITY · BREAKOUT · RANGE · MOMENTUM · PRICE ACTION · MINIMUM 1:2 RR</div></div>
-      <div id="campaignLivePrices" class="campaign-live-prices"><div class="campaign-live-price"><span>BTC</span><b>—</b></div><div class="campaign-live-price"><span>GOLD</span><b>—</b></div></div>
+      <div><div class="asset">CONFIRMED MARKET LEVELS</div><div class="sub">Only strong, historically tested levels · 5M rejection + 1M confirmation for entries</div></div>
     </div>
-    <div id="campaignSignals" class="six-assets"><div class="empty">Loading six-engine live analysis and historical backtests…</div></div>
+    <div id="campaignSignals" class="levels-assets"><div class="empty">Loading confirmed support and resistance levels…</div></div>
   </section>
-  <div class="footer">BTC uses Binance USD-M historical/live candles. GOLD uses Binance XAUUSDT TradFi Perpetual historical/live candles; Vantage MT5 remains an optional separate broker feed. All six-engine signals use completed candles only. Historical entries are simulated at the next candle open; when one candle reaches both SL and TP, SL is assumed first unless lower-timeframe evidence exists. Fees, spread and slippage are not included where historical cost data is unavailable. All trades are simulated; no broker orders are sent.</div>
+  <div class="levels-footer">BUY / SELL appears only after the level, higher-timeframe structure, 5M rejection, 1M confirmation and minimum 1:2 risk/reward all agree. Otherwise the level stays WAITING. No qualifying level means NO TRADE. Historical reactions do not guarantee future results.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
-const n = (v,d=2) => v===null||v===undefined||!Number.isFinite(Number(v)) ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:0});
-const pct = v => v===null||v===undefined ? '—' : `${Number(v).toFixed(3)}%`;
-const money = v => v===null||v===undefined ? '—' : (Math.abs(v)>=1e9?`${(v/1e9).toFixed(2)}B`:Math.abs(v)>=1e6?`${(v/1e6).toFixed(2)}M`:Math.abs(v)>=1e3?`${(v/1e3).toFixed(1)}K`:n(v,0));
-const time = ts => ts ? new Date(ts).toLocaleTimeString() : '—';
-function metric(k,v){return `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`}
-function level(k,v){return `<div class="level"><div class="k">${k}</div><div class="v">${v}</div></div>`}
-function tag(text,kind='neutral'){return `<span class="tag ${kind}">${text}</span>`}
-function biasKind(s){return s==='BULLISH'?'good':s==='BEARISH'?'bad':'neutral'}
-function renderAsset(id,a){
-  const el=$(id); const an=a.analysis||{}; const sc=a.scores||{}; const bull=sc.bull_pressure; const bear=sc.bear_pressure;
-  const price=a.exchange_price? n(a.exchange_price,a.asset==='BTC'?1:3):'—';
-  const directGold=a.asset==='GOLD' && a.broker_candle_feed && a.vantage_feed_fresh && a.exchange_feed_fresh;
-  const mappedFresh=directGold || (a.vantage_feed_fresh && a.basis_samples>=3 && a.exchange_feed_fresh && a.basis_updated_ts && (Date.now()-a.basis_updated_ts)<=180000);
-  const mappedPrice=directGold? n(a.exchange_price,3):(mappedFresh? n(a.vantage_price,a.asset==='BTC'?1:3):'Waiting for bridge');
-  const session=an.commodity_session?.status;
-  const pressure = sc.label||'WARMING UP';
-  const pressureKind=pressure.includes('BEARISH')?'bad':pressure.includes('BULLISH')?'good':'warn';
-  const lastEvent=(a.events||[])[0];
-  const rangeHigh=an.range_high, rangeLow=an.range_low;
-  const h=a.adjusted_levels||{};
-  const funding=a.funding_rate===null?'—':`${(a.funding_rate*100).toFixed(4)}%`;
-  const obi=a.book_imbalance===null?'—':`${(a.book_imbalance*100).toFixed(1)}%`;
-  const oiChange=a.oi_change_5m_pct===null?'—':pct(a.oi_change_5m_pct);
-  const localTrend=an.local_trend||'WARMING';
-  const lsr=a.long_short_ratio===null?'—':n(a.long_short_ratio,3);
-  const bullNum=bull===null||bull===undefined?'—':n(bull,0);
-  const bearNum=bear===null||bear===undefined?'—':n(bear,0);
-  el.innerHTML=`
-    <div class="head"><div><div class="asset">${a.asset==='BTC'?'BITCOIN':'GOLD'}</div><div class="symbol">${a.exchange_symbol} · ${a.asset==='BTC'?'Binance USDⓈ-M Futures':(directGold?'Vantage MT5 broker feed':(String(a.historical_source||'').includes('Binance Futures TradFi')?'Binance TradFi Perpetual':'Binance XAUUSDT history warming up'))}</div></div>${tag(pressure,pressureKind)}</div>
-    <div class="price">${price}</div><div class="small">${a.asset==='BTC'?'Binance Futures mark price':(directGold?'Vantage MT5 broker price':(String(a.historical_source||'').includes('Binance Futures TradFi')?'Binance XAUUSDT live continuous-kline price':'Binance XAUUSDT live price'))} · Vantage live quote: <b>${mappedPrice}</b></div><div class="tiny">${a.historical_source||'Historical source unavailable'}</div>
-    <div class="small" style="margin-top:4px">${directGold?`Direct Vantage MT5 OHLC · ${a.vantage_ticker||'XAUUSD'} · ${a.broker_candle_age_seconds??'—'}s candle sync`:(mappedFresh?`Basis ratio ${Number(a.basis_ratio).toFixed(6)} · ${a.vantage_ticker||'Vantage feed'} · ${a.vantage_timeframe||'TF'}`:'Vantage MT5 bridge not calibrated / stale')} ${a.asset==='GOLD'&&a.commodity_session?.status?` · Commodity session: ${a.commodity_session.status}`:''}</div>
-    <div class="scoregrid">
-      <div class="score"><div class="small">BULLISH PRESSURE INDEX</div><div class="num" style="color:var(--green)">${bullNum}<span class="small"> / 100</span></div><div class="bar"><div class="fill green" style="width:${bull||0}%"></div></div></div>
-      <div class="score"><div class="small">BEARISH PRESSURE INDEX</div><div class="num" style="color:var(--red)">${bearNum}<span class="small"> / 100</span></div><div class="bar"><div class="fill red" style="width:${bear||0}%"></div></div></div>
-    </div>
-    <div class="section">Crowd & order-flow</div>
-    <div class="metrics">
-      ${metric('Local trend',tag(localTrend,biasKind(localTrend)))}
-      ${metric('1H higher trend',tag(a.higher_timeframe_trend||'WARMING',biasKind(a.higher_timeframe_trend)))}
-      ${metric('Global long accounts',a.long_account===null?'—':pct(a.long_account*100))}
-      ${metric('Long / short ratio',lsr)}
-      ${metric('Open interest',money(a.open_interest))}
-      ${metric('OI change · 5m',oiChange)}
-      ${metric('Funding rate',funding)}
-      ${metric('Order-book imbalance',obi)}
-      ${metric('CVD · 5m',money(a.cvd_5m))}
-      ${metric('CVD · 15m',money(a.cvd_15m))}
-      ${metric('Long liquidations · 5m',money(a.long_liquidations_usdt))}
-      ${metric('Short liquidations · 5m',money(a.short_liquidations_usdt))}
-      ${metric('Analysis bars',an.ready?`${an.bars} (${$('tf').value})`:'warming up')}
-    </div>
-    <div class="section">Horizontal Reaction Levels · Binance</div>
-    <div class="small" style="margin-bottom:9px">Previous day/week levels and confirmed swing/equal-high-low prices · ${$('tf').value} swing scan</div>
-    <div class="reaction-list">
-      ${(a.reaction_levels||[]).length ? a.reaction_levels.map(l=>`<div class="reaction-row"><div><div class="reaction-name">${l.name}</div><div class="reaction-meta">${l.source} · ${l.kind==='support'?'Support candidate':'Resistance candidate'}</div></div><div class="reaction-rule ${l.kind}"></div><div class="reaction-price">${n(l.price,a.asset==='BTC'?1:3)}</div></div>`).join('') : '<div class="empty">Collecting candles to calculate reaction levels…</div>'}
-    </div>
-    <div class="section">Feed health</div>
-    <div class="feedrow"><span>Market / reference feed</span>${tag(a.exchange_feed_fresh?'LIVE':'STALE',a.exchange_feed_fresh?'good':'bad')}</div>
-    <div class="feedrow"><span>Order book age</span><b>${a.book_age_seconds===null?'—':`${a.book_age_seconds}s`}</b></div>
-    <div class="feedrow"><span>Vantage bridge</span>${tag(mappedFresh?'CALIBRATED':'NOT READY',mappedFresh?'good':'warn')}</div>
-    <div class="feedrow"><span>Last event</span><b>${lastEvent?lastEvent.type:'No confirmed event yet'}</b></div>
-    ${a.error?`<div class="small" style="color:var(--red);margin-top:8px">Feed warning: ${a.error}</div>`:''}
-  `;
-}
-
-function renderMarketIntelligence(info,digits){
-  if(!info) return '<div class="mbie-card"><div class="mbie-title">MBIE · MARKET CONTEXT</div><div class="campaign-foot">Waiting for market intelligence.</div></div>';
-  const auction=info.auction_profile||{};
-  const liquidity=info.liquidity||{};
-  const zones=info.active_zones||{};
-  const momentum=info.momentum||{};
-  const volatility=info.volatility||{};
-  const flow=info.order_flow||{};
-  const volume=info.volume_behaviour||{};
-  const session=info.session||{};
-  const news=info.news_risk||{};
-  const nearest=(item,digits)=>item ? (item.label||item.name||'LEVEL')+' · '+n(item.price,digits)+(item.timeframe?' · '+item.timeframe:'') : '—';
-  const score=info.market_context_score===null||info.market_context_score===undefined?'—':n(info.market_context_score,1)+'/100';
-  const supply=(zones.supply||[]).length;
-  const demand=(zones.demand||[]).length;
-  const scenarios=Object.entries(info.scenarios||{}).map(([key,value])=>{
-    const title=key.replaceAll('_',' ').toUpperCase();
-    const evidence=(value.evidence||[]).slice(0,3).join(' · ')||'No supporting evidence yet';
-    const opposing=(value.opposing||[]).slice(0,2).join(' · ');
-    return '<div class="mbie-scenario"><b>'+title+'</b> '+tag(value.status||'DEVELOPING',value.status==='SUPPORTED'?'good':'warn')
-      +'<p>'+evidence+(opposing?' · Opposing: '+opposing:'')+'</p></div>';
+const number = (value, digits=2) => {
+  if(value===null || value===undefined || !Number.isFinite(Number(value))) return '—';
+  return Number(value).toLocaleString(undefined,{maximumFractionDigits:digits,minimumFractionDigits:0});
+};
+const escapeHtml = value => String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
+function renderAsset(asset){
+  const digits=asset.asset==='BTC'?1:3;
+  const levels=Array.isArray(asset.levels)?asset.levels:[];
+  const rows=levels.map(level=>{
+    const kind=level.type==='SUPPORT'?'support':'resistance';
+    const direction=level.status==='BUY'?'buy':level.status==='SELL'?'sell':'waiting';
+    const distance=number(level.distance,digits)+(level.distance_pct===null||level.distance_pct===undefined?'':' · '+number(level.distance_pct,2)+'%');
+    return '<div class="levels-row">'
+      +'<div class="levels-cell"><div class="levels-label">Rank</div><div class="levels-value">'+escapeHtml(level.rank)+'</div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Support / Resistance</div><div class="levels-value '+kind+'">'+(kind==='support'?'SUPPORT':'RESISTANCE')+'</div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Exact Level Price</div><div class="levels-value">'+number(level.level_price,digits)+'</div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Distance</div><div class="levels-value">'+distance+'</div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Strength Score</div><div class="levels-value score">'+number(level.strength_score,0)+'/100</div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Status</div><div class="levels-status '+direction+'">'+escapeHtml(level.status||'WAITING')+'</div></div>'
+      +'</div>';
   }).join('');
-  const components=Object.entries(info.score_components||{}).map(([key,value])=>
-    '<span>'+key.replaceAll('_',' ')+' · '+(value.status||'UNAVAILABLE')+'</span>'
-  ).join('');
-  return '<div class="mbie-card">'
-    +'<div class="mbie-head"><div class="mbie-title">MBIE · MARKET UNDERSTANDING</div>'
-    +tag(info.market_regime||'WARMING UP',info.market_regime==='TRENDING'?'good':info.market_regime==='RANGING'?'warn':'neutral')+'</div>'
-    +'<div class="mbie-grid">'
-    +'<div class="mbie-item"><div class="k">Overall market bias</div><div class="v">'+(info.market_bias||'NEUTRAL')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Trend strength</div><div class="v">'+(info.trend_strength===null||info.trend_strength===undefined?'—':n(info.trend_strength,1)+'/100')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Context quality score</div><div class="v">'+score+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Data coverage</div><div class="v">'+n(info.data_coverage_pct||0,1)+'% of weighted inputs</div></div>'
-    +'<div class="mbie-item"><div class="k">Market phase</div><div class="v">'+(info.market_phase||'UNCLASSIFIED')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Structure event</div><div class="v">'+(info.structure_event||'—')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Liquidity sweep</div><div class="v">'+(liquidity.sweep||'NONE CONFIRMED')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Nearest buy-side liquidity</div><div class="v">'+nearest(info.nearest_buy_side_liquidity,digits)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Nearest sell-side liquidity</div><div class="v">'+nearest(info.nearest_sell_side_liquidity,digits)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Supply / Demand zones</div><div class="v">'+supply+' supply · '+demand+' demand</div></div>'
-    +'<div class="mbie-item"><div class="k">FVG / Order Block</div><div class="v">'+(zones.fvg?zones.fvg.side+' FVG':'No active FVG')+' · '+(zones.order_block?zones.order_block.side+' OB':'No candidate OB')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">POC / VAH / VAL</div><div class="v">'+n(auction.poc,digits)+' / '+n(auction.vah,digits)+' / '+n(auction.val,digits)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Volume behaviour</div><div class="v">'+(volume.status||'UNAVAILABLE')+' · RV '+n(volume.relative_volume,2)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Order flow</div><div class="v">'+(flow.status||'UNAVAILABLE')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Momentum / RSI / ADX</div><div class="v">'+(momentum.direction||'—')+' · '+n(momentum.rsi,1)+' / '+n(momentum.adx,1)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Volatility</div><div class="v">'+(volatility.state||'—')+' · ATR '+n(volatility.atr,3)+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Session</div><div class="v">'+(session.active||[]).join(' / ')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">News risk</div><div class="v">'+(news.status||'UNAVAILABLE')+'</div></div>'
-    +'<div class="mbie-item"><div class="k">Reversal warning</div><div class="v">'+((info.scenarios||{}).reversal_transition?.status||'DEVELOPING')+'</div></div>'
-    +'</div>'
-    +'<div class="mbie-subhead">MARKET SCENARIOS</div><div class="mbie-scenarios">'+scenarios+'</div>'
-    +'<div class="campaign-foot">Next confirmation: '+(info.next_confirmation_required||'—')+'</div>'
-    +'<div class="campaign-foot">Context score is not win probability. Auction profile status: '+(auction.status||'UNAVAILABLE')+'. Order-flow status: '+(flow.status||'UNAVAILABLE')+'.</div>'
-    +'<div class="mbie-subhead">DATA COVERAGE BY INPUT</div><div class="engine-contract">'+components+'</div>'
-    +'</div>';
+  const emptyMessage=asset.status==='WARMING UP'
+    ? 'WARMING UP · Waiting for enough completed historical candles.'
+    : 'NO TRADE · No level passed the strict confirmation filters.';
+  return '<section class="levels-asset">'
+    +'<div class="levels-asset-title">'+(asset.asset==='BTC'?'BITCOIN (BTC)':'GOLD (XAUUSD)')+'</div>'
+    +'<div class="levels-head"><div>Rank</div><div>Support / Resistance</div><div>Exact Level Price</div><div>Distance</div><div>Strength Score</div><div>Status</div></div>'
+    +(rows||'<div class="levels-empty">'+emptyMessage+'</div>')
+    +'</section>';
 }
-
-function renderAdvancedStrategy(payload){
+function renderLevels(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
-  const digitsFor=asset=>asset==='BTC'?1:3;
-  const esc=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
-  const fmt=(value,digits=2)=>value===null||value===undefined||value===''?'—':typeof value==='number'&&Number.isFinite(value)?n(value,digits):esc(value);
-  const stat=(value,digits=2)=>value===null||value===undefined?'—':value==='INF'?'INF':typeof value==='number'?n(value,digits):esc(value);
-  const rate=(summary)=>summary?.status==='INSUFFICIENT DATA'?'INSUFFICIENT DATA':summary?.win_rate_pct===null||summary?.win_rate_pct===undefined?'—':n(summary.win_rate_pct,2)+'%';
-  const metricRow=(label,p)=>'<tr>'
-    +'<td><b>'+esc(label)+'</b></td>'
-    +'<td>'+stat(p?.total_trades,0)+'</td>'
-    +'<td>'+stat(p?.winning_trades??p?.total_winning_trades,0)+'</td>'
-    +'<td>'+stat(p?.losing_trades??p?.total_losing_trades,0)+'</td>'
-    +'<td>'+stat(p?.break_even_trades,0)+'</td>'
-    +'<td>'+rate(p)+'</td>'
-    +'<td>'+(p?.loss_rate_pct===null||p?.loss_rate_pct===undefined?'—':n(p.loss_rate_pct,2)+'%')+'</td>'
-    +'<td>'+stat(p?.actual_average_rr??p?.actual_risk_reward_ratio,2)+'</td>'
-    +'<td>'+stat(p?.net_profit_loss_r,2)+'R</td>'
-    +'<td>'+stat(p?.profit_factor,2)+'</td>'
-    +'<td>'+stat(p?.maximum_drawdown_r,2)+'R</td>'
-    +'<td>'+stat(p?.max_consecutive_wins??p?.maximum_consecutive_wins,0)+'</td>'
-    +'<td>'+stat(p?.max_consecutive_losses??p?.maximum_consecutive_losses,0)+'</td>'
-    +'</tr>';
-  const metricsTable=(rows)=>'<div class="six-table-wrap"><table class="six-stats"><thead><tr>'
-    +'<th>Sample</th><th>Trades</th><th>Wins</th><th>Losses</th><th>BE</th><th>Win Rate</th><th>Loss Rate</th><th>Actual Avg RR</th><th>Net R</th><th>Profit Factor</th><th>Max DD</th><th>Win Streak</th><th>Loss Streak</th>'
-    +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
-  const statusKind=status=>status==='BUY'?'good':status==='SELL'?'bad':status==='INSUFFICIENT DATA'?'neutral':'warn';
-  if(!assets.length){
-    root.innerHTML='<div class="empty">AST 9/15 EMA engine is warming up. Waiting for sufficient closed-candle history; no win rate is assumed.</div>';
-    return;
-  }
-  const sections=assets.map(a=>{
-    const asset=a.asset;
-    const digits=digitsFor(asset);
-    const combos=a.combinations||{};
-    const comboHtml=['A','B','C'].map(code=>{
-      const item=combos[code]||{};
-      const live=item.live||{};
-      const h=item.historical||{};
-      const i=item.in_sample||{};
-      const o=item.out_of_sample||{};
-      const f=item.forward_testing||{};
-      const side=live.side||live.status||'WAITING';
-      const plan=live.trade_plan;
-      const stages=live.stages||{};
-      const stageOrder=['4h','1h','30m','15m','5m','1m'];
-      const stageCards=stageOrder.filter(tf=>stages[tf]).map(tf=>{
-        const stage=stages[tf]||{};
-        const stageStatus=stage.status||'WAITING';
-        return '<div class="six-engine">'
-          +'<div class="six-engine-title">'+tf.toUpperCase()+' CONFIRMATION</div>'
-          +'<div class="six-engine-dir '+statusKind(stageStatus)+'">'+esc(stageStatus)+'</div>'
-          +'<div class="six-engine-reason">'+esc(stage.reason||'Waiting for completed candles')+'</div>'
-          +(stage.strength?'<div class="six-engine-reason">Trend strength: '+esc(stage.strength)+'</div>':'')
-          +(stage.momentum?'<div class="six-engine-reason">Momentum: '+esc(stage.momentum)+'</div>':'')
-          +'</div>';
-      }).join('');
-      const planHtml=plan
-        ? '<div class="six-plan">'
-          +'<div class="six-plan-cell entry"><div class="k">Entry</div><div class="v">'+n(plan.entry_price,digits)+'</div></div>'
-          +'<div class="six-plan-cell stop"><div class="k">Stop Loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
-          +'<div class="six-plan-cell target"><div class="k">Take Profit · 2R</div><div class="v">'+n(plan.take_profit,digits)+'</div></div>'
-          +'<div class="six-plan-cell"><div class="k">Trigger</div><div class="v">'+n(plan.trigger_price,digits)+'</div></div></div>'
-        : '<div class="six-waiting">'+esc(live.reason||'WAITING · Mandatory confirmations have not all passed.')+'</div>';
-      const backtestUrl='/api/backtest/'+encodeURIComponent(asset)+'/'+encodeURIComponent(code);
-      const resultRows=metricRow('Full historical',h)
-        +metricRow('In-sample · 70%',i)
-        +metricRow('Out-of-sample · 30%',o)
-        +metricRow('Paper forward test',f);
-      return '<article class="six-tf-card" style="margin-bottom:14px">'
-        +'<div class="six-tf-head"><b>COMBINATION '+code+' · '+esc(item.label||'')+'</b>'+tag(side,statusKind(side))+'</div>'
-        +'<div class="six-engine-grid">'+stageCards+'</div>'
-        +planHtml
-        +'<div class="six-section-title">HISTORICAL & FORWARD PERFORMANCE</div>'
-        +metricsTable(resultRows)
-        +'<div class="six-note">Backtest log: <a href="'+backtestUrl+'" target="_blank" rel="noopener">Open '+code+' trade list</a>'
-        +' · Historical costs: '+esc(h.costs?.reason||'Not available in the historical candle feed.')
-        +' · Forward testing is paper-only and stored in process memory; it resets after a service restart.</div>'
-        +(item.backtest_reason?'<div class="six-note">'+esc(item.backtest_reason)+'</div>':'')
-        +'<div class="six-asset-meta">Decision: '+esc(live.reason||'Waiting')+'</div>'
-        +'</article>';
-    }).join('');
-    const overall=a.overall_historical||{};
-    const forward=a.overall_forward_testing||{};
-    const overallRows=metricRow('All three combinations · historical',overall)
-      +metricRow('All three combinations · paper forward',forward);
-    const price=a.live_reference_price;
-    return '<section class="six-asset">'
-      +'<div class="six-asset-head"><div><div class="six-asset-name">'+esc(asset)+' · AST 9/15 EMA MTF</div>'
-      +'<div class="six-asset-meta">Live price: <b data-live-price="'+esc(asset)+'">'+fmt(price,digits)+'</b>'
-      +' · Source: '+esc(a.data_source||'Unavailable')
-      +' · Closed bars: '+esc(JSON.stringify(a.timeframe_data||{}))+'</div></div>'
-      +tag(a.status||'WARMING UP',statusKind(a.status))+'</div>'
-      +'<div class="six-section-title">LIVE HIGHER-TO-LOWER CONFIRMATION · 1:2 MINIMUM RR</div>'
-      +comboHtml
-      +'<div class="six-section-title">MARKET SUMMARY · '+esc(asset)+'</div>'
-      +metricsTable(overallRows)
-      +'</section>';
-  }).join('');
-  const combined=payload.overall_combined||{};
-  const combinedRows=metricRow('BTC + GOLD · all combinations',combined.historical||{})
-    +metricRow('BTC + GOLD · in-sample',combined.in_sample||{})
-    +metricRow('BTC + GOLD · out-of-sample',combined.out_of_sample||{});
-  const comboTotals=payload.combined_by_combination||{};
-  const comboSummary=['A','B','C'].map(code=>{
-    const item=comboTotals[code]||{};
-    return metricRow('BTC + GOLD · Combination '+code,item.historical||{});
-  }).join('');
-  const combinedSection='<section class="six-asset">'
-    +'<div class="six-asset-name">OVERALL COMBINED RESULTS · BTC + GOLD</div>'
-    +'<div class="six-section-title">COMBINATION-WISE POOLED RESULTS</div>'+metricsTable(comboSummary)
-    +'<div class="six-section-title">ALL COMBINATIONS POOLED</div>'+metricsTable(combinedRows)
-    +'<div class="six-note">Pooled totals include the separate A/B/C strategy runs. They are not independent trades where combinations signal at the same time, so use the individual combination results for decisions.</div>'
-    +'</section>';
-  root.innerHTML=sections+combinedSection;
-}
-function renderEvents(events){
-  if(!events.length){$('events').innerHTML='<div class="empty">No confirmed event yet. Radar is collecting data.</div>';return;}
-  $('events').innerHTML=events.slice(0,18).map(e=>{
-    const isDown=/BEARISH|UPPER|LONG_STOP/.test(e.type);
-    const digits=e.asset==='BTC'?1:3;
-    return `<div class="event"><div class="etype" style="color:${isDown?'var(--red)':'var(--green)'}">${e.asset} · ${e.type.replaceAll('_',' ')}</div><div style="flex:1;min-width:0"><div class="desc">${e.detail}</div><div class="tiny">${time(e.time)} · ${e.timeframe} · Event price: ${e.price===null?'—':n(e.price,digits)}</div></div></div>`;
-  }).join('');
+  root.innerHTML=assets.length
+    ? assets.map(renderAsset).join('')
+    : '<div class="levels-empty">WARMING UP · Waiting for market history and live candles.</div>';
 }
 let refreshInFlight=false;
 async function fetchJson(url){
@@ -855,86 +635,20 @@ async function refresh(){
   if(refreshInFlight) return;
   refreshInFlight=true;
   try{
-    const [health,strategy]=await Promise.all([
-      fetchJson('/api/health'),
-      fetchJson('/api/strategy')
-    ]);
-    renderAdvancedStrategy(strategy);
-    const alertsOn=Boolean(health.strategy_alerts_enabled);
-    $('notificationStatus').textContent=alertsOn?'Strategy Telegram alerts: ON':'Strategy Telegram alerts: OFF · setup required';
-    $('notificationStatus').style.color=alertsOn?'var(--green)':'var(--amber)';
-    $('notificationStatus').title=alertsOn
-      ? 'Server-side six-engine strategy alerts are monitoring independently of this dashboard tab.'
-      : 'Set ENABLE_TELEGRAM=true, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render Environment.';
-    $('connDot').className='dot '+(health.market_stream_connected?'on':'off');
-    $('connText').textContent=health.market_stream_connected
-      ? 'API connected · market feed live'
-      : 'API connected · waiting for market feed';
-  }catch(e){
+    const [health,levels]=await Promise.all([fetchJson('/api/health'),fetchJson('/api/strategy')]);
+    renderLevels(levels);
+    const live=Boolean(health.market_stream_connected);
+    $('connDot').className='dot '+(live?'on':'off');
+    $('connText').textContent=live?'LIVE · Market feed connected':'API connected · Waiting for market feed';
+  }catch(error){
     $('connDot').className='dot off';
-    $('connText').textContent='Strategy API reconnecting…';
-    console.error('AST six-engine dashboard refresh failed:',e);
+    $('connText').textContent='Reconnecting to market feed…';
+    console.error('AST market levels refresh failed:',error);
   }finally{
     refreshInFlight=false;
   }
 }
-let refreshTimer=null;
-let refreshPaused=false;
-function configureAutoRefresh(){
-  if(refreshTimer!==null){clearInterval(refreshTimer);refreshTimer=null;}
-  const selected=Number($('refreshInterval').value)||100;
-  // 100ms mode is a live quote stream; expensive strategy cards refresh at 1s.
-  const analysisInterval=selected===100?1000:selected;
-  $('refreshInterval').title=selected===100
-    ? 'Live BTC/Gold prices stream up to 10 times per second. Strategy cards refresh every 1 second.'
-    : 'Strategy cards and market status refresh every '+(analysisInterval/1000)+' seconds.';
-  $('refreshToggle').textContent=refreshPaused?'Resume':'Pause';
-  $('refreshToggle').setAttribute('aria-pressed',String(refreshPaused));
-  if(!refreshPaused) refreshTimer=setInterval(refresh,analysisInterval);
-}
-$('refreshInterval').addEventListener('change',configureAutoRefresh);
-
-let livePriceSocket=null;
-let livePriceReconnectTimer=null;
-let livePricePaused=false;
-function connectLivePrices(){
-  if(livePricePaused || !('WebSocket' in window)) return;
-  if(livePriceSocket && (livePriceSocket.readyState===WebSocket.OPEN || livePriceSocket.readyState===WebSocket.CONNECTING)) return;
-  const scheme=location.protocol==='https:'?'wss:':'ws:';
-  livePriceSocket=new WebSocket(scheme+'//'+location.host+'/ws/prices');
-  livePriceSocket.onmessage=event=>{
-    try{
-      const payload=JSON.parse(event.data);
-      if(payload.type!=='prices') return;
-      for(const [asset,item] of Object.entries(payload.assets||{})){
-        if(item.price===null||item.price===undefined) continue;
-        const digits=asset==='BTC'?1:3;
-        const formatted=n(item.price,digits);
-        document.querySelectorAll('[data-live-price="'+asset+'"]').forEach(node=>{node.textContent=formatted;});
-      }
-    }catch(error){console.warn('Live price packet parse failed',error);}
-  };
-  livePriceSocket.onclose=()=>{
-    livePriceSocket=null;
-    if(livePriceReconnectTimer!==null) clearTimeout(livePriceReconnectTimer);
-    if(!livePricePaused) livePriceReconnectTimer=setTimeout(connectLivePrices,1200);
-  };
-  livePriceSocket.onerror=()=>{try{livePriceSocket?.close();}catch(error){}};
-}
-connectLivePrices();
-$('refreshToggle').addEventListener('click',()=>{
-  refreshPaused=!refreshPaused;
-  livePricePaused=refreshPaused;
-  configureAutoRefresh();
-  if(refreshPaused){
-    if(livePriceReconnectTimer!==null) clearTimeout(livePriceReconnectTimer);
-    livePriceSocket?.close();
-  }else{
-    connectLivePrices();
-    refresh();
-  }
-});
 refresh();
-configureAutoRefresh();
+setInterval(refresh,1000);
 </script>
 </body></html>
