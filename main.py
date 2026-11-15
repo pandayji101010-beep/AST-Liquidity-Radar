@@ -1553,13 +1553,6 @@ async def config() -> dict[str, Any]:
         "historical_trade_endpoint": "/api/backtest/{asset}/{timeframe}",
 
 
-
-
-
-
-        },
-
-
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
         "telegram_configured": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "notes": [
