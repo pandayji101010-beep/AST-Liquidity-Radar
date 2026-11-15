@@ -25,7 +25,7 @@ from historical_sources import (
     load_binance_tradfi_gold_history,
     load_binance_tradfi_gold_live,
 )
-from advanced_multi_strategy import AdvancedMultiStrategyEngine, TIMEFRAME_ORDER, COMBINATIONS, aggregate_reports
+from market_levels_engine import HighConfidenceMarketLevelsEngine
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -121,11 +121,11 @@ class AssetState:
     trend_lock_side: str | None = None
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
-    advanced_strategy_engine: AdvancedMultiStrategyEngine = field(init=False)
+    market_levels_engine: HighConfidenceMarketLevelsEngine = field(init=False)
     data_source: str | None = None
 
     def __post_init__(self) -> None:
-        self.advanced_strategy_engine = AdvancedMultiStrategyEngine(self.key)
+        self.market_levels_engine = HighConfidenceMarketLevelsEngine(self.key)
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
     binance_tradfi_stream_active: bool = False
@@ -321,7 +321,7 @@ states: dict[str, AssetState] = {
     key: AssetState(key=key, symbol=symbol) for key, symbol in SYMBOLS.items()
 }
 
-app = FastAPI(title="AST Advanced Multi-Strategy Radar", version="3.0.0")
+app = FastAPI(title="AST High-Confidence Market Levels", version="4.0.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 http_client: httpx.AsyncClient | None = None
@@ -1252,7 +1252,7 @@ async def initialize_market_data_and_workers() -> None:
     # Strategy replay runs off the request path. The dashboard API returns the
     # latest completed cache immediately, even while a 25k-bar replay is warming.
     background_tasks.append(
-        asyncio.create_task(strategy_snapshot_worker(), name="advanced-strategy-snapshot-cache")
+        asyncio.create_task(strategy_snapshot_worker(), name="market-levels-snapshot-cache")
     )
 
 
@@ -1270,10 +1270,10 @@ async def startup() -> None:
     if STRATEGY_ALERTS_ENABLED:
         alert_task = asyncio.create_task(strategy_alert_worker(), name="strategy-telegram-alerts")
         background_tasks.append(alert_task)
-        log.info("Advanced strategy Telegram alerts enabled; monitoring every %.1f seconds", STRATEGY_ALERT_POLL_SECONDS)
+        log.info("Market-level Telegram alerts enabled; monitoring every %.1f seconds", STRATEGY_ALERT_POLL_SECONDS)
     else:
-        log.info("Strategy Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-    log.info("AST Liquidity Radar API ready; historical bootstrap running in background")
+        log.info("Level Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+    log.info("AST High-Confidence Market Levels API ready; market history bootstrap running in background")
 
 
 @app.on_event("shutdown")
@@ -1299,8 +1299,8 @@ async def health() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
-        "strategy_alerts_enabled": STRATEGY_ALERTS_ENABLED,
-        "strategy_alert_poll_seconds": STRATEGY_ALERT_POLL_SECONDS if STRATEGY_ALERTS_ENABLED else None,
+        "level_alerts_enabled": STRATEGY_ALERTS_ENABLED,
+        "level_alert_poll_seconds": STRATEGY_ALERT_POLL_SECONDS if STRATEGY_ALERTS_ENABLED else None,
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
         "data_sources": {
             key: {
@@ -1363,46 +1363,27 @@ _strategy_scanner_cache_lock: asyncio.Lock | None = None
 
 
 async def refresh_strategy_scanner_cache() -> dict[str, Any]:
-    """Refresh AST 9/15 EMA live signals and all three historical replays."""
+    """Refresh confirmed support/resistance levels for BTC and GOLD."""
     global _strategy_scanner_cache, _strategy_scanner_cache_lock
     if _strategy_scanner_cache_lock is None:
         _strategy_scanner_cache_lock = asyncio.Lock()
 
     async with _strategy_scanner_cache_lock:
         assets: list[dict[str, Any]] = []
-        reports_by_combination: dict[str, list[dict[str, Any]]] = {key: [] for key in COMBINATIONS}
-        all_reports: list[dict[str, Any]] = []
         for state in states.values():
-            best_bid = max(state.bids) if state.bids else None
-            best_ask = min(state.asks) if state.asks else None
-            orderbook_spread = (best_ask - best_bid) if best_bid is not None and best_ask is not None else None
-            live_spread = state.vantage_spread if state.key == "GOLD" and state.vantage_spread is not None else orderbook_spread
             result = await asyncio.to_thread(
-                state.advanced_strategy_engine.snapshot,
+                state.market_levels_engine.snapshot,
                 state.candles,
                 state.mark_price,
-                live_spread,
             )
             result["data_source"] = state.data_source or "Source not reported"
-            result["broker_candle_feed"] = bool(state.broker_candle_feed)
-            result["broker_candle_time"] = state.broker_candle_ts
             assets.append(result)
-            for combination in COMBINATIONS:
-                report = state.advanced_strategy_engine.historical_trades(combination)
-                reports_by_combination[combination].append(report)
-                all_reports.append(report)
             await asyncio.sleep(0)
 
-        combined_by_combination = {
-            combination: aggregate_reports(reports, f"BTC + GOLD · {combination}")
-            for combination, reports in reports_by_combination.items()
-        }
         _strategy_scanner_cache = {
             "time": now_ms(),
-            "strategy_name": "AST 9/15 EMA Advanced Multi-Timeframe Trading Engine",
+            "strategy_name": "AST High-Confidence Market Levels Engine",
             "assets": assets,
-            "combined_by_combination": combined_by_combination,
-            "overall_combined": aggregate_reports(all_reports, "BTC + GOLD · ALL COMBINATIONS"),
             "status": "READY" if assets else "WARMING UP",
         }
         return _strategy_scanner_cache
@@ -1416,35 +1397,21 @@ async def strategy_snapshot_worker() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Advanced strategy cache refresh failed")
+            log.exception("Market levels cache refresh failed")
         await asyncio.sleep(1.0)
 
 
 @app.get("/api/strategy")
 async def strategy_scanner() -> dict[str, Any]:
-    """Return AST 9/15 EMA live and historical multi-timeframe results."""
+    """Return only validated support/resistance levels and their live status."""
     if _strategy_scanner_cache is not None:
         return _strategy_scanner_cache
     return {
         "time": now_ms(),
-        "strategy_name": "AST 9/15 EMA Advanced Multi-Timeframe Trading Engine",
+        "strategy_name": "AST High-Confidence Market Levels Engine",
         "assets": [],
         "status": "WARMING UP",
     }
-
-
-@app.get("/api/backtest/{asset}/{combination}")
-async def historical_backtest(asset: str, combination: str) -> dict[str, Any]:
-    """Return the complete deterministic historical trade log for market/combo A, B or C."""
-    key = asset.upper()
-    combo = combination.upper()
-    if key not in states:
-        raise HTTPException(status_code=404, detail="Unknown market")
-    if combo not in COMBINATIONS:
-        raise HTTPException(status_code=404, detail="Unsupported combination. Use A, B or C.")
-    result = states[key].advanced_strategy_engine.historical_trades(combo)
-    return {"asset": key, **result}
-
 
 
 @app.websocket("/ws/prices")
@@ -1494,42 +1461,37 @@ def _strategy_alert_price(asset: str, value: Any) -> str:
 
 
 async def strategy_alert_worker() -> None:
-    """Send one deduplicated Telegram alert for each newly confirmed 9/15 EMA combo."""
+    """Send a Telegram alert only after a level-based entry is confirmed."""
     bootstrapped_assets: set[str] = set()
     while True:
         try:
             payload = await strategy_scanner()
             for result in payload.get("assets", []):
                 asset = str(result.get("asset") or "MARKET").upper()
-                combos = result.get("combinations") or {}
+                levels = result.get("levels") or []
                 if asset not in bootstrapped_assets:
-                    for combo, item in combos.items():
-                        live = item.get("live") or {}
-                        signal_time = live.get("signal_time")
-                        side = live.get("side")
-                        if signal_time and side:
-                            strategy_alert_seen[asset].add(f"{asset}:{combo}:{signal_time}:{side}")
-                    if combos:
-                        bootstrapped_assets.add(asset)
+                    for level in levels:
+                        if level.get("status") in ("BUY", "SELL"):
+                            key = f"{asset}:{level.get('type')}:{level.get('level_price')}:{level.get('signal_time')}"
+                            strategy_alert_seen[asset].add(key)
+                    bootstrapped_assets.add(asset)
                     continue
 
-                for combo, item in combos.items():
-                    live = item.get("live") or {}
-                    plan = live.get("trade_plan") or {}
-                    side = live.get("side")
-                    signal_time = live.get("signal_time")
-                    if live.get("status") not in ("BUY", "SELL") or not side or not plan or not signal_time:
+                for level in levels:
+                    side = level.get("status")
+                    signal_time = level.get("signal_time")
+                    if side not in ("BUY", "SELL") or not signal_time:
                         continue
-                    alert_id = f"{asset}:{combo}:{signal_time}:{side}"
+                    alert_id = f"{asset}:{level.get('type')}:{level.get('level_price')}:{signal_time}"
                     if alert_id in strategy_alert_seen[asset]:
                         continue
                     message = (
-                        f"AST 9/15 EMA MTF | {asset} | COMBINATION {combo}\n"
-                        f"{side} CONFIRMED · 4H/1H → 30M/15M → 5M → 1M\n"
-                        f"Entry: {_strategy_alert_price(asset, plan.get('entry_price'))}\n"
-                        f"Stop Loss: {_strategy_alert_price(asset, plan.get('stop_loss'))}\n"
-                        f"Take Profit (2R): {_strategy_alert_price(asset, plan.get('take_profit'))}\n"
-                        "Paper plan only — no broker order is placed."
+                        f"AST HIGH-CONFIDENCE LEVEL | {asset}\n"
+                        f"{side} CONFIRMED · {level.get('type')}\n"
+                        f"Level: {_strategy_alert_price(asset, level.get('level_price'))}\n"
+                        f"Strength: {level.get('strength_score')}/100\n"
+                        "5M rejection + 1M structure confirmation · minimum 1:2 RR\n"
+                        "Reference alert only — no broker order is placed."
                     )
                     if await send_telegram(message):
                         strategy_alert_seen[asset].add(alert_id)
@@ -1538,7 +1500,7 @@ async def strategy_alert_worker() -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("AST 9/15 EMA Telegram alert worker failed")
+            log.exception("AST market-level Telegram alert worker failed")
             await asyncio.sleep(max(5.0, STRATEGY_ALERT_POLL_SECONDS))
 
 
