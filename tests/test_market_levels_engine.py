@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import unittest
 
 from market_levels_engine import (
@@ -84,9 +83,10 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
         rows = []
         previous = 100.0
         for i in range(100):
-            base = 100.0 + i * 0.20
             phase = i % 10
-            offset = phase * 0.18 if phase <= 5 else (10 - phase) * 0.18
+            cycle = i // 10
+            base = 100.0 + cycle * 2.0 + phase * 0.03
+            offset = phase * 0.50 if phase <= 5 else (10 - phase) * 0.50
             close = base + offset
             op = previous
             rows.append(candle((i + 1) * 60_000, op, max(op, close) + 0.08, min(op, close) - 0.08, close))
