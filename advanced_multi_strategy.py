@@ -1,20 +1,51 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import bisect
+import os
+from collections import defaultdict
 from typing import Any
 
 TIMEFRAME_ORDER = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
-ENGINE_NAMES = ("trend", "liquidity", "breakout", "range", "momentum", "price_action")
-MIN_BARS = 80
+TIMEFRAME_MS = {
+    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+}
 BACKTEST_LIMIT = 25_000
 TARGET_R = 2.0
+MIN_BARS = 50
+MIN_REPORT_TRADES = 30
+MIN_SPLIT_TRADES = 10
+
+COMBINATIONS: dict[str, dict[str, Any]] = {
+    "A": {
+        "label": "4H → 1H → 30M → 15M → 5M → 1M",
+        "higher": ("4h", "1h"),
+        "middle": ("30m", "15m"),
+        "pullback": "5m",
+        "entry": "1m",
+    },
+    "B": {
+        "label": "1H → 30M → 15M → 5M → 1M",
+        "higher": ("1h",),
+        "middle": ("30m", "15m"),
+        "pullback": "5m",
+        "entry": "1m",
+    },
+    "C": {
+        "label": "15M → 5M → 1M",
+        "higher": ("15m",),
+        "middle": ("15m",),
+        "pullback": "5m",
+        "entry": "1m",
+    },
+}
 
 
-def _finite(value: Any, default: float = 0.0) -> float:
+def _number(value: Any, default: float = 0.0) -> float:
     try:
         result = float(value)
         return result if result == result and abs(result) != float("inf") else default
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -22,555 +53,703 @@ def _ema(values: list[float], period: int) -> float:
     if not values:
         return 0.0
     alpha = 2.0 / (period + 1.0)
-    value = values[0]
-    for item in values[1:]:
-        value = alpha * item + (1.0 - alpha) * value
-    return value
+    result = values[0]
+    for value in values[1:]:
+        result = alpha * value + (1.0 - alpha) * result
+    return result
 
 
-def _rsi(closes: list[float], period: int = 14) -> float | None:
-    if len(closes) < period + 1:
-        return None
-    gains = 0.0
-    losses = 0.0
-    for i in range(len(closes) - period, len(closes)):
-        change = closes[i] - closes[i - 1]
-        if change > 0:
-            gains += change
-        elif change < 0:
-            losses -= change
-    if losses == 0:
-        return 100.0 if gains else 50.0
-    rs = (gains / period) / (losses / period)
-    return 100.0 - (100.0 / (1.0 + rs))
+def _ema_pair(candles: list[dict[str, Any]]) -> tuple[float, float, float, float]:
+    closes = [float(x["c"]) for x in candles]
+    current = closes[-120:]
+    prior = closes[-123:-3]
+    if not prior:
+        prior = current[:-1] or current
+    return _ema(current, 9), _ema(current, 15), _ema(prior, 9), _ema(prior, 15)
 
 
-def _atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float:
-    if len(closes) < 2:
+def _atr(candles: list[dict[str, Any]], period: int = 14) -> float:
+    if len(candles) < 2:
         return 0.0
-    start = max(1, len(closes) - period)
-    true_ranges = []
-    for i in range(start, len(closes)):
-        true_ranges.append(max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
-        ))
-    return sum(true_ranges) / len(true_ranges) if true_ranges else 0.0
+    start = max(1, len(candles) - period)
+    values = []
+    for i in range(start, len(candles)):
+        high = float(candles[i]["h"])
+        low = float(candles[i]["l"])
+        previous_close = float(candles[i - 1]["c"])
+        values.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+    return sum(values) / len(values) if values else 0.0
 
 
-def _confirmed_pivots(
-    highs: list[float], lows: list[float], index: int, left: int = 2, right: int = 2,
-    lookback: int = 120,
-) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
-    """Return pivots whose right-hand confirmation candles have already closed."""
+def _body(candle: dict[str, Any]) -> tuple[float, float, float, float]:
+    op, high, low, close = (float(candle[k]) for k in ("o", "h", "l", "c"))
+    span = max(high - low, 1e-12)
+    return abs(close - op), (close - low) / span, high - max(op, close), min(op, close) - low
+
+
+def _trend_state(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(candles) < MIN_BARS:
+        return {"direction": "INSUFFICIENT DATA", "strength": "INSUFFICIENT DATA", "ready": False, "reason": f"Need {MIN_BARS} closed candles; have {len(candles)}."}
+    ema9, ema15, prior9, prior15 = _ema_pair(candles)
+    atr = _atr(candles)
+    close = float(candles[-1]["c"])
+    if atr <= 0:
+        return {"direction": "FLAT", "strength": "WEAK", "ready": True, "reason": "ATR is unavailable or zero.", "ema9": ema9, "ema15": ema15, "atr": atr}
+    separation = abs(ema9 - ema15) / atr
+    slope9, slope15 = (ema9 - prior9) / atr, (ema15 - prior15) / atr
+    if separation < 0.035 or (abs(slope9) < 0.004 and abs(slope15) < 0.004):
+        direction = "FLAT"
+    elif ema9 > ema15 and slope9 > 0 and slope15 > -0.003:
+        direction = "BULLISH"
+    elif ema9 < ema15 and slope9 < 0 and slope15 < 0.003:
+        direction = "BEARISH"
+    else:
+        direction = "FLAT"
+    if separation >= 0.18 and abs(slope9) >= 0.025 and abs(slope15) >= 0.012:
+        strength = "STRONG"
+    elif separation >= 0.075:
+        strength = "MODERATE"
+    else:
+        strength = "WEAK"
+    reason = f"EMA9 {ema9:.8g} / EMA15 {ema15:.8g}; separation {separation:.3f} ATR; slopes {slope9:.3f}/{slope15:.3f} ATR; close {close:.8g}."
+    return {
+        "direction": direction, "strength": strength, "ready": True, "reason": reason,
+        "ema9": ema9, "ema15": ema15, "prior_ema9": prior9, "prior_ema15": prior15,
+        "slope9_atr": slope9, "slope15_atr": slope15, "separation_atr": separation,
+        "atr": atr, "close": close,
+    }
+
+
+def _confirmed_swings(candles: list[dict[str, Any]], left: int = 2, right: int = 2, lookback: int = 120) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    highs = [float(x["h"]) for x in candles]
+    lows = [float(x["l"]) for x in candles]
+    end = len(candles) - right
+    start = max(left, end - lookback)
     pivot_highs: list[tuple[int, float]] = []
     pivot_lows: list[tuple[int, float]] = []
-    start = max(left, index - lookback)
-    end = index - right
-    for j in range(start, end + 1):
+    for j in range(start, end):
         high_window = highs[j - left:j + right + 1]
         low_window = lows[j - left:j + right + 1]
-        if len(high_window) == left + right + 1 and highs[j] == max(high_window):
-            if highs[j] > highs[j - 1] and highs[j] >= highs[j + 1]:
-                pivot_highs.append((j, highs[j]))
-        if len(low_window) == left + right + 1 and lows[j] == min(low_window):
-            if lows[j] < lows[j - 1] and lows[j] <= lows[j + 1]:
-                pivot_lows.append((j, lows[j]))
+        if len(high_window) != left + right + 1:
+            continue
+        if highs[j] == max(high_window) and highs[j] > highs[j - 1] and highs[j] >= highs[j + 1]:
+            pivot_highs.append((j, highs[j]))
+        if lows[j] == min(low_window) and lows[j] < lows[j - 1] and lows[j] <= lows[j + 1]:
+            pivot_lows.append((j, lows[j])
+            )
     return pivot_highs, pivot_lows
 
 
-def _body_metrics(candle: dict[str, Any]) -> tuple[float, float, float, float]:
-    op = _finite(candle.get("o"))
-    high = _finite(candle.get("h"))
-    low = _finite(candle.get("l"))
-    close = _finite(candle.get("c"))
-    span = max(high - low, 1e-12)
-    body = abs(close - op)
-    close_position = (close - low) / span
-    upper_wick = high - max(op, close)
-    lower_wick = min(op, close) - low
-    return body, close_position, upper_wick, lower_wick
+def _rejection(candle: dict[str, Any], side: str, atr: float, min_body_atr: float = 0.12) -> bool:
+    body, close_position, upper_wick, lower_wick = _body(candle)
+    if atr <= 0 or body < atr * min_body_atr:
+        return False
+    if side == "BUY":
+        return float(candle["c"]) > float(candle["o"]) and lower_wick >= max(body * 0.70, atr * 0.08) and close_position >= 0.66
+    return float(candle["c"]) < float(candle["o"]) and upper_wick >= max(body * 0.70, atr * 0.08) and close_position <= 0.34
 
 
-@dataclass
-class Evaluation:
-    side: str | None
-    status: str
-    reason: str
-    engines: dict[str, dict[str, Any]]
-    stop_anchor: float | None
-    risk_unit: float | None
-    candle_time: int | None
-    features: dict[str, Any]
+def _recent_cross(candles: list[dict[str, Any]], side: str, bars: int = 3) -> bool:
+    if len(candles) < MIN_BARS + 1:
+        return False
+    start = max(1, len(candles) - bars)
+    for end in range(start, len(candles)):
+        current = _ema_pair(candles[:end + 1])
+        previous = _ema_pair(candles[:end])
+        if side == "BUY" and previous[0] <= previous[1] and current[0] > current[1]:
+            return True
+        if side == "SELL" and previous[0] >= previous[1] and current[0] < current[1]:
+            return True
+    return False
+
+
+def _middle_setup(candles: list[dict[str, Any]], side: str) -> dict[str, Any]:
+    trend = _trend_state(candles)
+    result = {"status": "WAITING", "direction": trend["direction"], "pullback_confirmed": False, "momentum": "UNKNOWN", "reason": trend["reason"], "trend": trend}
+    if not trend["ready"]:
+        result["status"] = "INSUFFICIENT DATA"
+        return result
+    expected = "BULLISH" if side == "BUY" else "BEARISH"
+    if trend["direction"] != expected:
+        result["status"] = "SETUP REJECTED"
+        result["reason"] = f"{trend['direction']} EMA regime does not agree with {side} higher-timeframe direction."
+        return result
+    atr, ema9, ema15 = float(trend["atr"]), float(trend["ema9"]), float(trend["ema15"])
+    current = candles[-1]
+    bodies = [abs(float(x["c"]) - float(x["o"])) for x in candles[-6:-1]]
+    average_body = sum(bodies) / len(bodies) if bodies else 0.0
+    current_body, _position, _upper, _lower = _body(current)
+    zone_low, zone_high = min(ema9, ema15) - atr * 0.25, max(ema9, ema15) + atr * 0.20
+    recent = candles[-4:]
+    if side == "BUY":
+        touched = any(float(x["l"]) <= zone_high and float(x["h"]) >= zone_low for x in recent)
+        rejected = _rejection(current, side, atr) and float(current["c"]) > ema9
+    else:
+        touched = any(float(x["h"]) >= zone_low and float(x["l"]) <= zone_high for x in recent)
+        rejected = _rejection(current, side, atr) and float(current["c"]) < ema9
+    pullback_confirmed = bool(touched and rejected)
+    crossed = _recent_cross(candles, side, 3)
+    spread_now = abs(ema9 - ema15)
+    previous_pair = _ema_pair(candles[:-1])
+    spread_previous = abs(previous_pair[0] - previous_pair[1])
+    expansion = current_body >= max(average_body * 1.05, atr * 0.12) or spread_now > spread_previous * 1.005
+    weakening = (side == "BUY" and float(current["c"]) < ema9) or (side == "SELL" and float(current["c"]) > ema9)
+    if current_body < atr * 0.06 and not crossed:
+        weakening = True
+    setup_ok = (crossed or pullback_confirmed) and expansion and not weakening
+    result.update({
+        "status": "BULLISH SETUP" if setup_ok and side == "BUY" else "BEARISH SETUP" if setup_ok else "SETUP REJECTED" if weakening else "WAITING",
+        "pullback_confirmed": pullback_confirmed,
+        "momentum": "EXPANDING" if expansion else "WEAKENING",
+        "rejection_confirmed": bool(rejected),
+        "recent_ema_crossover": bool(crossed),
+        "reason": f"{'EMA crossover' if crossed else 'EMA-zone pullback + rejection' if pullback_confirmed else 'No fresh crossover or confirmed pullback'}; momentum {'expanding' if expansion else 'weak/contracting'}; EMA9/15 {ema9:.8g}/{ema15:.8g}.",
+    })
+    return result
+
+
+def _pullback_confirmation(candles: list[dict[str, Any]], side: str) -> dict[str, Any]:
+    trend = _trend_state(candles)
+    result = {"status": "WAITING", "pullback_confirmed": False, "reason": trend["reason"], "trend": trend}
+    if not trend["ready"]:
+        result["status"] = "INSUFFICIENT DATA"
+        return result
+    expected = "BULLISH" if side == "BUY" else "BEARISH"
+    if trend["direction"] != expected:
+        result["status"] = "SETUP REJECTED"
+        result["reason"] = f"5M EMA direction {trend['direction']} conflicts with {side}."
+        return result
+    atr, ema9, ema15 = float(trend["atr"]), float(trend["ema9"]), float(trend["ema15"])
+    current = candles[-1]
+    lower, upper = min(ema9, ema15) - atr * 0.25, max(ema9, ema15) + atr * 0.20
+    recent = candles[-4:]
+    if side == "BUY":
+        touched = any(float(x["l"]) <= upper and float(x["h"]) >= lower for x in recent)
+        reclaimed = float(current["c"]) > ema9 and _rejection(current, side, atr, 0.10)
+    else:
+        touched = any(float(x["h"]) >= lower and float(x["l"]) <= upper for x in recent)
+        reclaimed = float(current["c"]) < ema9 and _rejection(current, side, atr, 0.10)
+    passed = touched and reclaimed
+    result.update({
+        "status": "PULLBACK CONFIRMED" if passed else "WAITING",
+        "pullback_confirmed": bool(passed),
+        "reason": "5M EMA-zone pullback was rejected in the trend direction." if passed else "Waiting for a 5M EMA-zone retest and closed-candle rejection.",
+    })
+    return result
+
+
+def _entry_trigger(candles: list[dict[str, Any]], side: str) -> dict[str, Any]:
+    result = {"status": "WAITING", "side": None, "trigger_price": None, "stop_anchor": None, "reason": "Waiting for 1M rejection, confirmed micro BOS and trigger break."}
+    if len(candles) < MIN_BARS + 2:
+        result["status"] = "INSUFFICIENT DATA"
+        result["reason"] = f"Need {MIN_BARS + 2} completed 1M candles; have {len(candles)}."
+        return result
+    confirmation, candidate = candles[-1], candles[-2]
+    candidate_prefix = candles[:-1]
+    trend = _trend_state(candidate_prefix)
+    if not trend["ready"] or trend["direction"] != ("BULLISH" if side == "BUY" else "BEARISH"):
+        result["reason"] = "1M EMA9/15 alignment or slope is not confirmed in the required direction."
+        return result
+    atr, ema9, ema15 = float(trend["atr"]), float(trend["ema9"]), float(trend["ema15"])
+    zone_low, zone_high = min(ema9, ema15) - atr * 0.25, max(ema9, ema15) + atr * 0.20
+    if side == "BUY":
+        zone_touch = float(candidate["l"]) <= zone_high and float(candidate["h"]) >= zone_low
+        rejection = _rejection(candidate, side, atr) and float(candidate["c"]) > ema9
+    else:
+        zone_touch = float(candidate["h"]) >= zone_low and float(candidate["l"]) <= zone_high
+        rejection = _rejection(candidate, side, atr) and float(candidate["c"]) < ema9
+    pivot_highs, pivot_lows = _confirmed_swings(candidate_prefix)
+    last_high = pivot_highs[-1] if pivot_highs else None
+    last_low = pivot_lows[-1] if pivot_lows else None
+    bos = bool(last_high and float(candidate["c"]) > last_high[1]) if side == "BUY" else bool(last_low and float(candidate["c"]) < last_low[1])
+    if not (zone_touch and rejection and bos):
+        result["reason"] = f"1M candidate rejected: EMA pullback={bool(zone_touch)}, rejection={bool(rejection)}, confirmed micro BOS={bool(bos)}."
+        return result
+    confirmation_body, confirmation_position, _cu, _cl = _body(confirmation)
+    current_ema9, current_ema15, _p9, _p15 = _ema_pair(candles)
+    current_close = float(confirmation["c"])
+    if side == "BUY":
+        trigger = float(candidate["h"])
+        trigger_broken = current_close > trigger
+        aligned = current_ema9 > current_ema15 and current_close > current_ema9
+        strong = float(confirmation["c"]) > float(confirmation["o"]) and confirmation_body >= atr * 0.10 and confirmation_position >= 0.62
+        extended = current_close - current_ema9 > atr * 1.50
+        stop_swing = last_low[1] if last_low else None
+        stop = min(float(candidate["l"]), stop_swing) - atr * 0.10 if stop_swing is not None else None
+    else:
+        trigger = float(candidate["l"])
+        trigger_broken = current_close < trigger
+        aligned = current_ema9 < current_ema15 and current_close < current_ema9
+        strong = float(confirmation["c"]) < float(confirmation["o"]) and confirmation_body >= atr * 0.10 and confirmation_position <= 0.38
+        extended = current_ema9 - current_close > atr * 1.50
+        stop_swing = last_high[1] if last_high else None
+        stop = max(float(candidate["h"]), stop_swing) + atr * 0.10 if stop_swing is not None else None
+    if not trigger_broken:
+        result["reason"] = f"1M trigger not closed beyond candidate candle level {trigger:.8g}."
+        return result
+    if not aligned or not strong:
+        result["reason"] = "1M EMA alignment or strong closed confirmation candle failed."
+        return result
+    if extended:
+        result["reason"] = "Entry rejected: price is more than 1.5 ATR away from EMA9."
+        return result
+    if stop is None or (side == "BUY" and stop >= current_close) or (side == "SELL" and stop <= current_close):
+        result["status"] = "SETUP REJECTED"
+        result["reason"] = "No valid recent confirmed swing available for structural stop-loss."
+        return result
+    risk = current_close - stop if side == "BUY" else stop - current_close
+    if risk <= 0 or risk > atr * 5.0:
+        result["status"] = "SETUP REJECTED"
+        result["reason"] = "Structural stop distance is invalid or wider than 5 ATR."
+        return result
+    result.update({
+        "status": side, "side": side, "trigger_price": trigger, "stop_anchor": stop,
+        "candidate_candle_time": int(candidate["t"]),
+        "confirmation_candle_time": int(confirmation["t"]),
+        "micro_bos": True, "pullback_rejection": True,
+        "reason": f"1M EMA retest rejection + confirmed micro BOS + close through trigger {trigger:.8g}.",
+    })
+    return result
+
+
+def _clean_candles(candles: Any) -> list[dict[str, float | int]]:
+    by_time: dict[int, dict[str, float | int]] = {}
+    if candles is None:
+        return []
+    for row in candles:
+        try:
+            stamp = int(row.get("t", 0))
+            op, high, low, close = (_number(row.get(k), float("nan")) for k in ("o", "h", "l", "c"))
+            volume = max(0.0, _number(row.get("v")))
+            if stamp <= 0 or any(x != x or abs(x) == float("inf") for x in (op, high, low, close)):
+                continue
+            if low <= 0 or high < max(op, close, low) or low > min(op, close, high):
+                continue
+            by_time[stamp] = {"t": stamp, "o": op, "h": high, "l": low, "c": close, "v": volume}
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return [by_time[key] for key in sorted(by_time)][-BACKTEST_LIMIT:]
+
+
+def _summary(trades: list[dict[str, Any]], bars: int, status_override: str | None = None) -> dict[str, Any]:
+    wins = [x for x in trades if x["result"] == "WIN"]
+    losses = [x for x in trades if x["result"] == "LOSS"]
+    breakeven = [x for x in trades if x["result"] == "BREAK_EVEN"]
+    net_values = [_number(x.get("net_result_r", x.get("result_r"))) for x in trades]
+    gross_values = [_number(x.get("result_r")) for x in trades]
+    gross_wins = [x for x in gross_values if x > 0]
+    gross_losses = [abs(x) for x in gross_values if x < 0]
+    net_wins = [x for x in net_values if x > 0]
+    net_losses = [abs(x) for x in net_values if x < 0]
+    equity = peak = max_dd = 0.0
+    win_streak = loss_streak = max_win_streak = max_loss_streak = 0
+    for trade, value in zip(trades, net_values):
+        equity += value
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+        if trade["result"] == "WIN":
+            win_streak += 1
+            loss_streak = 0
+        elif trade["result"] == "LOSS":
+            loss_streak += 1
+            win_streak = 0
+        else:
+            win_streak = loss_streak = 0
+        max_win_streak = max(max_win_streak, win_streak)
+        max_loss_streak = max(max_loss_streak, loss_streak)
+    closed = len(trades)
+    status = status_override or ("INSUFFICIENT DATA" if bars < MIN_BARS else "NO CLOSED TRADES" if closed == 0 else "CALCULATED")
+    average_win = sum(gross_wins) / len(gross_wins) if gross_wins else None
+    average_loss = sum(gross_losses) / len(gross_losses) if gross_losses else None
+    return {
+        "status": status, "bars_tested": bars, "total_trades": closed, "total_historical_trades": closed,
+        "winning_trades": len(wins), "losing_trades": len(losses), "break_even_trades": len(breakeven),
+        "total_winning_trades": len(wins), "total_losing_trades": len(losses),
+        "win_rate_pct": round(len(wins) / closed * 100.0, 2) if closed else None,
+        "loss_rate_pct": round(len(losses) / closed * 100.0, 2) if closed else None,
+        "actual_average_rr": round(average_win / average_loss, 4) if average_win is not None and average_loss else None,
+        "actual_risk_reward_ratio": round(average_win / average_loss, 4) if average_win is not None and average_loss else None,
+        "target_rr": TARGET_R, "gross_net_r": round(sum(gross_values), 4), "net_profit_loss_r": round(sum(net_values), 4),
+        "maximum_drawdown_r": round(max_dd, 4), "max_consecutive_wins": max_win_streak, "max_consecutive_losses": max_loss_streak,
+        "maximum_consecutive_wins": max_win_streak, "maximum_consecutive_losses": max_loss_streak,
+        "profit_factor": round(sum(net_wins) / sum(net_losses), 4) if net_losses else (None if not net_wins else "INF"),
+        "average_winning_r": round(average_win, 4) if average_win is not None else None,
+        "average_losing_r": round(average_loss, 4) if average_loss is not None else None,
+        "sample_quality": "ADEQUATE" if closed >= MIN_REPORT_TRADES else "LOW SAMPLE",
+    }
 
 
 class AdvancedMultiStrategyEngine:
-    """One point-in-time signal evaluator shared by live decisions and historical replay."""
+    """AST 9/15 EMA MTF engine. Live decisions and historical replay share one evaluator."""
 
     def __init__(self, asset: str = "MARKET") -> None:
         self.asset = asset.upper()
         self._backtest_cache: dict[str, dict[str, Any]] = {}
         self._backtest_signatures: dict[str, tuple[Any, ...]] = {}
+        self._forward_active: dict[str, dict[str, Any]] = {}
+        self._forward_completed: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._forward_seen: set[str] = set()
+        self.fee_bps_per_side = max(0.0, _number(os.getenv("AST_FEE_BPS_PER_SIDE"), 0.0))
+        self.spread_bps = max(0.0, _number(os.getenv("AST_HISTORICAL_SPREAD_BPS"), 0.0))
+        self.slippage_bps_per_side = max(0.0, _number(os.getenv("AST_SLIPPAGE_BPS_PER_SIDE"), 0.0))
+
+    def _signature(self, data: dict[str, list[dict[str, Any]]]) -> tuple[Any, ...]:
+        values: list[Any] = []
+        for tf in TIMEFRAME_ORDER:
+            rows = data.get(tf, [])
+            values.extend((tf, len(rows), int(rows[0]["t"]) if rows else None, int(rows[-1]["t"]) if rows else None))
+        return tuple(values)
 
     @staticmethod
-    def _validate(candles: list[dict[str, Any]]) -> list[dict[str, float | int]]:
-        clean: list[dict[str, float | int]] = []
-        last_t = -1
-        for row in candles:
-            try:
-                t = int(row.get("t", 0))
-                o, h, l, c = (_finite(row.get(k), float("nan")) for k in ("o", "h", "l", "c"))
-                v = max(0.0, _finite(row.get("v")))
-                if t <= last_t or any(x != x or abs(x) == float("inf") for x in (o, h, l, c)):
-                    continue
-                if h < max(o, c, l) or l > min(o, c, h) or l <= 0:
-                    continue
-                clean.append({"t": t, "o": o, "h": h, "l": l, "c": c, "v": v})
-                last_t = t
-            except (TypeError, ValueError):
-                continue
-        return clean[-BACKTEST_LIMIT:]
-
-    def evaluate(self, candles: list[dict[str, Any]], index: int | None = None) -> Evaluation:
-        return self._evaluate_clean(self._validate(candles), index)
-
-    def _evaluate_clean(self, data: list[dict[str, Any]], index: int | None = None) -> Evaluation:
-        i = len(data) - 1 if index is None else min(max(int(index), 0), len(data) - 1)
-        if len(data) < MIN_BARS or i < MIN_BARS - 1:
-            return Evaluation(None, "WARMING UP", f"Need at least {MIN_BARS} completed candles; received {len(data)}.", {}, None, None, None, {})
-        # Fixed lookback keeps replay bounded. No candle after i can enter this view.
-        view_start = max(0, i - 260)
-        view = data[view_start:i + 1]
-        i = len(view) - 1
-        opens = [float(x["o"]) for x in view]
-        highs = [float(x["h"]) for x in view]
-        lows = [float(x["l"]) for x in view]
-        closes = [float(x["c"]) for x in view]
-        volumes = [float(x["v"]) for x in view]
-        current = view[-1]
-        previous = view[-2]
-        close = closes[-1]
-        atr = _atr(highs, lows, closes, 14)
-        ema20 = _ema(closes[-min(len(closes), 120):], 20)
-        ema50 = _ema(closes[-min(len(closes), 240):], 50)
-        ema20_prev = _ema(closes[-min(len(closes), 125):-5], 20) if len(closes) >= 25 else ema20
-        rsi = _rsi(closes, 14)
-        body, close_pos, upper_wick, lower_wick = _body_metrics(current)
-        prev_body = abs(float(previous["c"]) - float(previous["o"]))
-        bull_candle = close > float(current["o"])
-        bear_candle = close < float(current["o"])
-        bull_displacement = bool(atr and bull_candle and body >= 0.60 * atr and close_pos >= 0.70)
-        bear_displacement = bool(atr and bear_candle and body >= 0.60 * atr and close_pos <= 0.30)
-        pivot_highs, pivot_lows = _confirmed_pivots(highs, lows, i)
-        last_two_highs = [x[1] for x in pivot_highs[-2:]]
-        last_two_lows = [x[1] for x in pivot_lows[-2:]]
-        structure_up = len(last_two_highs) == 2 and len(last_two_lows) == 2 and last_two_highs[-1] > last_two_highs[-2] and last_two_lows[-1] > last_two_lows[-2]
-        structure_down = len(last_two_highs) == 2 and len(last_two_lows) == 2 and last_two_highs[-1] < last_two_highs[-2] and last_two_lows[-1] < last_two_lows[-2]
-        ema_up = close > ema20 > ema50 and ema20 >= ema20_prev
-        ema_down = close < ema20 < ema50 and ema20 <= ema20_prev
-        trend_side = "BUY" if structure_up and ema_up else "SELL" if structure_down and ema_down else None
-
-        range_start = max(0, i - 20)
-        prior_high = max(highs[range_start:i])
-        prior_low = min(lows[range_start:i])
-        range_width = prior_high - prior_low
-        range_atr = range_width / atr if atr else None
-        vol_window = volumes[max(0, i - 20):i]
-        avg_volume = sum(vol_window) / len(vol_window) if vol_window else 0.0
-        volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else None
-
-        # 1) TREND ENGINE: confirmed HH/HL or LH/LL must agree with EMA structure/slope.
-        trend_direction = "BULLISH" if trend_side == "BUY" else "BEARISH" if trend_side == "SELL" else "NEUTRAL"
-        trend_reason = "Confirmed HH/HL + price above rising EMA20/EMA50" if trend_side == "BUY" else "Confirmed LH/LL + price below falling EMA20/EMA50" if trend_side == "SELL" else "No aligned confirmed swing sequence and EMA trend"
-
-        # 2) LIQUIDITY ENGINE: equal pools and sweep -> later close through the post-sweep structure.
-        tolerance = atr * 0.20 if atr else 0.0
-        equal_high = len(pivot_highs) >= 2 and abs(pivot_highs[-1][1] - pivot_highs[-2][1]) <= tolerance
-        equal_low = len(pivot_lows) >= 2 and abs(pivot_lows[-1][1] - pivot_lows[-2][1]) <= tolerance
-        buy_liquidity = pivot_highs[-1][1] if pivot_highs else prior_high
-        sell_liquidity = pivot_lows[-1][1] if pivot_lows else prior_low
-        current_upper_sweep = highs[-1] > prior_high and close < prior_high
-        current_lower_sweep = lows[-1] < prior_low and close > prior_low
-        confirmed_sweep_side: str | None = None
-        sweep_source = "No confirmed sweep"
-        search_from = max(20, i - 5)
-        for j in range(i - 1, search_from - 1, -1):
-            old_hi = max(highs[max(0, j - 20):j])
-            old_lo = min(lows[max(0, j - 20):j])
-            if lows[j] < old_lo and closes[j] > old_lo and close > max(highs[j:i]):
-                confirmed_sweep_side = "BUY"
-                sweep_source = "Sell-side sweep followed by bullish structure reclaim"
-                break
-            if highs[j] > old_hi and closes[j] < old_hi and close < min(lows[j:i]):
-                confirmed_sweep_side = "SELL"
-                sweep_source = "Buy-side sweep followed by bearish structure reclaim"
-                break
-        liquidity_side = confirmed_sweep_side
-        liquidity_direction = "BULLISH" if liquidity_side == "BUY" else "BEARISH" if liquidity_side == "SELL" else "NEUTRAL"
-        liquidity_reason = sweep_source
-        if liquidity_side is None and (current_lower_sweep or current_upper_sweep):
-            liquidity_reason = "Sweep detected; waiting for post-sweep structure confirmation"
-
-        # 3) BREAKOUT ENGINE: close beyond a prior range with displacement and available volume/momentum support.
-        vol_ok = volume_ratio is None or volume_ratio >= 1.10
-        breakout_up = bool(close > prior_high and bull_displacement and vol_ok)
-        breakout_down = bool(close < prior_low and bear_displacement and vol_ok)
-        breakout_level = prior_high if breakout_up else prior_low if breakout_down else None
-        if not breakout_up and not breakout_down:
-            # Confirm a retest only after the original breakout candle has closed.
-            for j in range(max(20, i - 5), i):
-                old_hi = max(highs[max(0, j - 20):j])
-                old_lo = min(lows[max(0, j - 20):j])
-                old_body, old_pos, _, _ = _body_metrics(view[j])
-                old_atr = _atr(highs[:j + 1], lows[:j + 1], closes[:j + 1], 14)
-                if closes[j] > old_hi and old_body >= 0.60 * old_atr and old_pos >= 0.70 and lows[-1] <= old_hi + 0.20 * max(atr, 1e-12) and close > old_hi and bull_candle:
-                    breakout_up, breakout_level = True, old_hi
-                    break
-                if closes[j] < old_lo and old_body >= 0.60 * old_atr and old_pos <= 0.30 and highs[-1] >= old_lo - 0.20 * max(atr, 1e-12) and close < old_lo and bear_candle:
-                    breakout_down, breakout_level = True, old_lo
-                    break
-        breakout_side = "BUY" if breakout_up else "SELL" if breakout_down else None
-        breakout_direction = "BULLISH" if breakout_up else "BEARISH" if breakout_down else "NEUTRAL"
-        breakout_reason = "Strong close beyond prior range with displacement/volume support" if breakout_side else "No confirmed close-and-retest breakout"
-
-        # 4) RANGE ENGINE: only trade edges of a compressed range after rejection; never its middle.
-        is_range = bool(atr and range_atr is not None and range_atr <= 5.5)
-        lower_edge = close <= prior_low + range_width * 0.22
-        upper_edge = close >= prior_high - range_width * 0.22
-        range_buy = is_range and lower_edge and bull_candle and (lower_wick >= max(body * 1.25, atr * 0.10)) and close_pos >= 0.60 and not breakout_down
-        range_sell = is_range and upper_edge and bear_candle and (upper_wick >= max(body * 1.25, atr * 0.10)) and close_pos <= 0.40 and not breakout_up
-        range_side = "BUY" if range_buy else "SELL" if range_sell else None
-        range_direction = "BULLISH" if range_buy else "BEARISH" if range_sell else "NEUTRAL"
-        range_reason = "Compressed range lower-edge rejection" if range_buy else "Compressed range upper-edge rejection" if range_sell else "No confirmed range-edge rejection; middle entries blocked" if is_range else "Range expansion / breakout conditions"
-
-        # 5) MOMENTUM ENGINE: RSI, EMA slope, candle strength, divergence and exhaustion.
-        rsi_value = rsi if rsi is not None else 50.0
-        exhaustion_up = rsi_value >= 76 and body < 0.45 * max(atr, 1e-12)
-        exhaustion_down = rsi_value <= 24 and body < 0.45 * max(atr, 1e-12)
-        bullish_divergence = False
-        bearish_divergence = False
-        if len(pivot_lows) >= 2:
-            (low_idx_a, low_a), (low_idx_b, low_b) = pivot_lows[-2], pivot_lows[-1]
-            rsi_a = _rsi(closes[:low_idx_a + 1], 14)
-            rsi_b = _rsi(closes[:low_idx_b + 1], 14)
-            bullish_divergence = bool(low_b < low_a and rsi_a is not None and rsi_b is not None and rsi_b > rsi_a + 2.0)
-        if len(pivot_highs) >= 2:
-            (high_idx_a, high_a), (high_idx_b, high_b) = pivot_highs[-2], pivot_highs[-1]
-            rsi_a = _rsi(closes[:high_idx_a + 1], 14)
-            rsi_b = _rsi(closes[:high_idx_b + 1], 14)
-            bearish_divergence = bool(high_b > high_a and rsi_a is not None and rsi_b is not None and rsi_b < rsi_a - 2.0)
-        momentum_buy = close > ema20 and ema20 >= ema20_prev and (rsi_value >= 54 or bullish_divergence) and body >= 0.25 * max(atr, 1e-12) and not exhaustion_up
-        momentum_sell = close < ema20 and ema20 <= ema20_prev and (rsi_value <= 46 or bearish_divergence) and body >= 0.25 * max(atr, 1e-12) and not exhaustion_down
-        momentum_side = "BUY" if momentum_buy else "SELL" if momentum_sell else None
-        momentum_direction = "BULLISH" if momentum_buy else "BEARISH" if momentum_sell else "NEUTRAL"
-        momentum_reason = (f"RSI {rsi_value:.1f}, EMA20 slope, candle strength" + (", bullish divergence" if bullish_divergence else ", bearish divergence" if bearish_divergence else "") + " aligned") if momentum_side else "Momentum weak, mixed or exhausted"
-
-        # 6) PRICE ACTION ENGINE: BOS/CHOCH plus candle pattern, FVG or order-block reaction.
-        last_pivot_high = pivot_highs[-1][1] if pivot_highs else None
-        last_pivot_low = pivot_lows[-1][1] if pivot_lows else None
-        bos_up = last_pivot_high is not None and close > last_pivot_high and bull_displacement
-        bos_down = last_pivot_low is not None and close < last_pivot_low and bear_displacement
-        choch_up = trend_direction == "BEARISH" and bos_up
-        choch_down = trend_direction == "BULLISH" and bos_down
-        prev_open, prev_close = float(previous["o"]), float(previous["c"])
-        bullish_engulf = bull_candle and prev_close < prev_open and float(current["o"]) <= prev_close and close >= prev_open and body >= prev_body
-        bearish_engulf = bear_candle and prev_close > prev_open and float(current["o"]) >= prev_close and close <= prev_open and body >= prev_body
-        bullish_rejection = bull_candle and lower_wick >= max(body * 1.5, atr * 0.15) and close_pos >= 0.68
-        bearish_rejection = bear_candle and upper_wick >= max(body * 1.5, atr * 0.15) and close_pos <= 0.32
-        bullish_fvg = i >= 2 and lows[-1] > highs[-3]
-        bearish_fvg = i >= 2 and highs[-1] < lows[-3]
-        bull_ob_reaction = False
-        bear_ob_reaction = False
-        for j in range(max(0, i - 6), i):
-            prior = view[j]
-            if float(prior["c"]) < float(prior["o"]) and lows[-1] <= float(prior["h"]) and close > float(prior["o"]):
-                bull_ob_reaction = True
-            if float(prior["c"]) > float(prior["o"]) and highs[-1] >= float(prior["l"]) and close < float(prior["o"]):
-                bear_ob_reaction = True
-        bull_pa_pattern = bullish_engulf or bullish_rejection or bullish_fvg or bull_ob_reaction
-        bear_pa_pattern = bearish_engulf or bearish_rejection or bearish_fvg or bear_ob_reaction
-        pa_buy = bool((bos_up or choch_up) and bull_pa_pattern)
-        pa_sell = bool((bos_down or choch_down) and bear_pa_pattern)
-        pa_side = "BUY" if pa_buy else "SELL" if pa_sell else None
-        pa_direction = "BULLISH" if pa_buy else "BEARISH" if pa_sell else "NEUTRAL"
-        pa_sources = [name for name, hit in (("BOS", bos_up or bos_down), ("CHOCH", choch_up or choch_down), ("ENGULFING", bullish_engulf or bearish_engulf), ("REJECTION", bullish_rejection or bearish_rejection), ("FVG", bullish_fvg or bearish_fvg), ("ORDER_BLOCK_REACTION", bull_ob_reaction or bear_ob_reaction)) if hit]
-        pa_reason = " / ".join(pa_sources) if pa_side else "Waiting for BOS/CHOCH plus a confirmed candle/FVG/order-block reaction"
-
-        engines = {
-            "trend": {"direction": trend_direction, "side": trend_side, "reason": trend_reason, "hh_hl": bool(structure_up), "lh_ll": bool(structure_down), "ema20": ema20, "ema50": ema50},
-            "liquidity": {"direction": liquidity_direction, "side": liquidity_side, "reason": liquidity_reason, "equal_high": bool(equal_high), "equal_low": bool(equal_low), "buy_side_liquidity": buy_liquidity, "sell_side_liquidity": sell_liquidity, "upper_sweep_pending": bool(current_upper_sweep), "lower_sweep_pending": bool(current_lower_sweep)},
-            "breakout": {"direction": breakout_direction, "side": breakout_side, "reason": breakout_reason, "level": breakout_level, "volume_ratio": volume_ratio},
-            "range": {"direction": range_direction, "side": range_side, "reason": range_reason, "active": is_range, "range_high": prior_high, "range_low": prior_low, "range_width_atr": range_atr},
-            "momentum": {"direction": momentum_direction, "side": momentum_side, "reason": momentum_reason, "rsi14": rsi, "bullish_divergence": bool(bullish_divergence), "bearish_divergence": bool(bearish_divergence), "exhaustion": bool(exhaustion_up or exhaustion_down)},
-            "price_action": {"direction": pa_direction, "side": pa_side, "reason": pa_reason, "bos_bullish": bool(bos_up), "bos_bearish": bool(bos_down), "choch_bullish": bool(choch_up), "choch_bearish": bool(choch_down), "sources": pa_sources},
-        }
-        votes = {name: info.get("side") for name, info in engines.items()}
-        buy_votes = sum(1 for value in votes.values() if value == "BUY")
-        sell_votes = sum(1 for value in votes.values() if value == "SELL")
-        trigger_buy = any(votes[name] == "BUY" for name in ("liquidity", "breakout", "range"))
-        trigger_sell = any(votes[name] == "SELL" for name in ("liquidity", "breakout", "range"))
-        buy_ready = buy_votes >= 4 and votes["price_action"] == "BUY" and trigger_buy and (votes["trend"] == "BUY" or votes["momentum"] == "BUY")
-        sell_ready = sell_votes >= 4 and votes["price_action"] == "SELL" and trigger_sell and (votes["trend"] == "SELL" or votes["momentum"] == "SELL")
-        side = "BUY" if buy_ready and not sell_ready else "SELL" if sell_ready and not buy_ready else None
-        reason = f"{buy_votes}/6 bullish engine confirmations" if side == "BUY" else f"{sell_votes}/6 bearish engine confirmations" if side == "SELL" else f"WAITING · BUY {buy_votes}/6, SELL {sell_votes}/6; require 4 aligned engines including Price Action and a trigger engine"
-
-        stop_anchor: float | None = None
-        if side and atr > 0:
-            buffer = max(0.15 * atr, close * 0.00005)
-            if side == "BUY":
-                structural_lows = [price for _, price in pivot_lows[-3:]]
-                anchor = min([float(current["l"])] + structural_lows) if structural_lows else float(current["l"])
-                stop_anchor = anchor - buffer
-            else:
-                structural_highs = [price for _, price in pivot_highs[-3:]]
-                anchor = max([float(current["h"])] + structural_highs) if structural_highs else float(current["h"])
-                stop_anchor = anchor + buffer
-            estimated_risk = close - stop_anchor if side == "BUY" else stop_anchor - close
-            if estimated_risk <= 0 or estimated_risk > atr * 6.0:
-                side = None
-                stop_anchor = None
-                reason = "WAITING · Structure-based stop is invalid or wider than 6 ATR"
-
-        return Evaluation(
-            side=side,
-            status="SIGNAL READY" if side else "WAITING",
-            reason=reason,
-            engines=engines,
-            stop_anchor=stop_anchor,
-            risk_unit=atr,
-            candle_time=int(current["t"]),
-            features={"atr14": atr, "ema20": ema20, "ema50": ema50, "rsi14": rsi, "volume_ratio": volume_ratio, "range_high": prior_high, "range_low": prior_low, "range_width_atr": range_atr, "buy_votes": buy_votes, "sell_votes": sell_votes},
-        )
-
-    @staticmethod
-    def _plan(side: str, entry: float, stop: float, signal_time: int, tf: str) -> dict[str, Any] | None:
-        risk = entry - stop if side == "BUY" else stop - entry
-        if not all(map(lambda x: x > 0, (entry, risk))) or risk > entry * 0.10:
-            return None
-        target = entry + TARGET_R * risk if side == "BUY" else entry - TARGET_R * risk
-        return {
-            "side": side,
-            "entry_price": round(entry, 8),
-            "stop_loss": round(stop, 8),
-            "take_profit": round(target, 8),
-            "risk_reward": TARGET_R,
-            "risk_distance": round(risk, 8),
-            "signal_time": signal_time,
-            "timeframe": tf,
-            "execution": "Next candle open in backtest; current live reference for live plan",
-        }
-
-    def live_timeframe(self, candles: list[dict[str, Any]], timeframe: str, live_price: float | None = None) -> dict[str, Any]:
-        data = self._validate(candles)
-        evaluation = self._evaluate_clean(data)
-        result: dict[str, Any] = {
-            "timeframe": timeframe,
-            "status": evaluation.status,
-            "side": evaluation.side,
-            "reason": evaluation.reason,
-            "candle_time": evaluation.candle_time,
-            "engines": evaluation.engines,
-            "features": evaluation.features,
-            "trade_plan": None,
-        }
-        if evaluation.side and evaluation.stop_anchor is not None and evaluation.candle_time is not None:
-            entry = _finite(live_price, _finite(data[-1]["c"])) if data else 0.0
-            plan = self._plan(evaluation.side, entry, evaluation.stop_anchor, evaluation.candle_time, timeframe)
-            if plan:
-                invalidated = (evaluation.side == "BUY" and entry <= evaluation.stop_anchor) or (evaluation.side == "SELL" and entry >= evaluation.stop_anchor)
-                if invalidated:
-                    result["status"] = "CANCELLED"
-                    result["side"] = None
-                    result["reason"] = "Setup invalidated: live price has crossed the structure stop before entry"
-                else:
-                    result["trade_plan"] = plan
-            else:
-                result["status"] = "WAITING"
-                result["side"] = None
-                result["reason"] = "Risk plan invalid at the current live reference price"
+    def _asof(data: dict[str, list[dict[str, Any]]], opens: dict[str, list[int]], close_time: int) -> dict[str, list[dict[str, Any]]]:
+        """Keep only bars with close timestamps <= the signal candle close."""
+        result: dict[str, list[dict[str, Any]]] = {}
+        for tf, rows in data.items():
+            end = bisect.bisect_right(opens[tf], close_time - TIMEFRAME_MS[tf]) if rows else 0
+            result[tf] = rows[:end]
         return result
 
-    @staticmethod
-    def _simulate_trade(
-        candles: list[dict[str, Any]], entry_index: int, side: str, entry: float, stop: float,
-        signal_time: int, timeframe: str, asset: str,
-    ) -> dict[str, Any] | None:
+    def _waiting_result(self, combination: str, status: str, reason: str, stages: dict[str, Any], higher: list[dict[str, Any]], entry: dict[str, Any] | None = None) -> dict[str, Any]:
+        strengths = [x.get("strength") for x in higher if x.get("strength")]
+        return {
+            "combination": combination, "combination_label": COMBINATIONS[combination]["label"],
+            "status": status, "side": None, "reason": reason, "stages": stages,
+            "higher_timeframe_trend": next((x.get("direction") for x in higher if x.get("direction")), "WAITING"),
+            "higher_timeframe_strength": strengths[0] if strengths else "WAITING",
+            "signal_time": int(entry.get("confirmation_candle_time", 0)) if entry else None,
+            "trigger_price": entry.get("trigger_price") if entry else None,
+            "stop_anchor": entry.get("stop_anchor") if entry else None,
+            "entry_confirmation": entry, "trade_plan": None,
+        }
+
+    def _evaluate_combination(self, data: dict[str, list[dict[str, Any]]], combination: str) -> dict[str, Any]:
+        spec = COMBINATIONS[combination]
+        entry_candles = data.get(spec["entry"], [])
+        stages: dict[str, Any] = {}
+        higher_states: list[dict[str, Any]] = []
+        directions: list[str] = []
+        blocked: list[str] = []
+        for tf in spec["higher"]:
+            state = _trend_state(data.get(tf, []))
+            higher_states.append(state)
+            stages[tf] = {
+                "status": state["direction"], "direction": state["direction"], "strength": state["strength"],
+                "reason": state["reason"], "ema9": state.get("ema9"), "ema15": state.get("ema15"),
+                "separation_atr": state.get("separation_atr"),
+            }
+            if not state["ready"] or state["direction"] not in ("BULLISH", "BEARISH") or state["strength"] == "WEAK":
+                blocked.append(tf)
+            else:
+                directions.append(state["direction"])
+        if blocked:
+            insuff = any(not state["ready"] for state in higher_states)
+            status = "INSUFFICIENT DATA" if insuff else "WAITING"
+            return self._waiting_result(combination, status, f"HTF flat/weak or history missing: {', '.join(blocked)}.", stages, higher_states)
+        if len(set(directions)) != 1:
+            return self._waiting_result(combination, "HTF CONFLICT", "Higher-timeframe EMA direction conflicts. No trade is allowed.", stages, higher_states)
+        side = "BUY" if directions[0] == "BULLISH" else "SELL"
+
+        middle_states = []
+        for tf in spec["middle"]:
+            state = _middle_setup(data.get(tf, []), side)
+            middle_states.append(state)
+            stages[tf] = {
+                "status": state["status"], "direction": state["direction"],
+                "pullback_confirmed": state["pullback_confirmed"], "momentum": state["momentum"],
+                "reason": state["reason"],
+            }
+        if any(x["status"] == "INSUFFICIENT DATA" for x in middle_states):
+            return self._waiting_result(combination, "INSUFFICIENT DATA", "Middle timeframe candle history is insufficient.", stages, higher_states)
+        if not all(x["status"] in ("BULLISH SETUP", "BEARISH SETUP") for x in middle_states):
+            return self._waiting_result(combination, "WAITING", "30M/15M setup confirmation is incomplete or rejected.", stages, higher_states)
+        if any(x["direction"] != ("BULLISH" if side == "BUY" else "BEARISH") for x in middle_states):
+            return self._waiting_result(combination, "WAITING", "Middle timeframe direction does not agree with HTF.", stages, higher_states)
+
+        pullback_tf = spec["pullback"]
+        pullback = _pullback_confirmation(data.get(pullback_tf, []), side)
+        stages[pullback_tf] = {"status": pullback["status"], "pullback_confirmed": pullback["pullback_confirmed"], "reason": pullback["reason"]}
+        if pullback["status"] == "INSUFFICIENT DATA":
+            return self._waiting_result(combination, "INSUFFICIENT DATA", "5M history is insufficient.", stages, higher_states)
+        if pullback["status"] != "PULLBACK CONFIRMED":
+            return self._waiting_result(combination, "WAITING", "5M pullback confirmation is missing.", stages, higher_states)
+
+        entry = _entry_trigger(entry_candles, side)
+        stages[spec["entry"]] = {
+            "status": entry["status"], "trigger_price": entry.get("trigger_price"),
+            "micro_bos": entry.get("micro_bos", False), "pullback_rejection": entry.get("pullback_rejection", False),
+            "reason": entry["reason"],
+        }
+        if entry["status"] == "INSUFFICIENT DATA":
+            return self._waiting_result(combination, "INSUFFICIENT DATA", "1M history is insufficient.", stages, higher_states)
+        if entry["side"] != side:
+            return self._waiting_result(combination, "WAITING", entry["reason"], stages, higher_states, entry=entry)
+        return {
+            "combination": combination, "combination_label": spec["label"], "status": side, "side": side,
+            "reason": f"All mandatory confirmations passed: {' → '.join([*spec['higher'], *spec['middle'], pullback_tf, spec['entry']])}.",
+            "stages": stages, "higher_timeframe_trend": side,
+            "higher_timeframe_strength": min((x["strength"] for x in higher_states), key=lambda x: {"STRONG": 3, "MODERATE": 2, "WEAK": 1}.get(x, 0)),
+            "signal_time": int(entry_candles[-1]["t"]) if entry_candles else None,
+            "trigger_price": entry.get("trigger_price"), "stop_anchor": entry.get("stop_anchor"),
+            "entry_confirmation": entry, "trade_plan": None,
+        }
+
+    def _cost_in_price(self, entry: float) -> float:
+        total_bps = self.fee_bps_per_side * 2.0 + self.spread_bps + self.slippage_bps_per_side * 2.0
+        return entry * total_bps / 10_000.0
+
+    def _simulate_trade(self, candles: list[dict[str, Any]], entry_index: int, side: str, entry: float, stop: float, signal_time: int, combination: str) -> dict[str, Any] | None:
         risk = entry - stop if side == "BUY" else stop - entry
-        if risk <= 0 or entry <= 0:
+        if risk <= 0 or entry <= 0 or risk > entry * 0.10:
             return None
         target = entry + TARGET_R * risk if side == "BUY" else entry - TARGET_R * risk
         for j in range(entry_index, len(candles)):
             bar = candles[j]
-            op, high, low = (_finite(bar.get(k)) for k in ("o", "h", "l"))
-            exit_price: float | None = None
-            status: str | None = None
-            stop_hit = False
-            target_hit = False
-            if j > entry_index:
-                if side == "BUY" and op <= stop:
-                    exit_price, status = op, "LOSS"
-                elif side == "SELL" and op >= stop:
-                    exit_price, status = op, "LOSS"
-                elif side == "BUY" and op >= target:
-                    exit_price, status = op, "WIN"
-                elif side == "SELL" and op <= target:
-                    exit_price, status = op, "WIN"
+            op, high, low = (_number(bar.get(k)) for k in ("o", "h", "l"))
+            exit_price = None
+            result = None
+            if (side == "BUY" and op <= stop) or (side == "SELL" and op >= stop):
+                exit_price, result = op, "LOSS"
+            elif (side == "BUY" and op >= target) or (side == "SELL" and op <= target):
+                exit_price, result = op, "WIN"
             if exit_price is None:
                 stop_hit = low <= stop if side == "BUY" else high >= stop
                 target_hit = high >= target if side == "BUY" else low <= target
-                if stop_hit and target_hit:
-                    # Conservative intrabar ordering: assume SL was touched first.
-                    exit_price, status = stop, "LOSS"
-                elif stop_hit:
-                    exit_price, status = stop, "LOSS"
+                if stop_hit:
+                    exit_price, result = stop, "LOSS"
                 elif target_hit:
-                    exit_price, status = target, "WIN"
-            if exit_price is not None and status:
-                realized_price_r = (exit_price - entry) / risk if side == "BUY" else (entry - exit_price) / risk
-                # The strategy's result model is fixed to +2R / -1R as specified.
-                # The actual price-derived R is retained separately for gap diagnostics.
-                result_r = TARGET_R if status == "WIN" else -1.0
-                return {
-                    "trade_id": f"{asset}:{timeframe}:{signal_time}:{side}",
-                    "asset": asset,
-                    "timeframe": timeframe,
-                    "side": side,
-                    "signal_time": signal_time,
-                    "entry_time": int(bar.get("t", 0)),
-                    "exit_time": int(bar.get("t", 0)),
-                    "entry_price": round(entry, 8),
-                    "stop_loss": round(stop, 8),
-                    "take_profit": round(target, 8),
-                    "exit_price": round(exit_price, 8),
-                    "result": status,
-                    "result_r": round(result_r, 4),
-                    "realized_price_r": round(realized_price_r, 4),
-                    "target_r": TARGET_R,
-                    "exit_reason": "SL_FIRST_SAME_CANDLE" if stop_hit and target_hit else ("STOP_LOSS" if status == "LOSS" else "TAKE_PROFIT"),
-                }
+                    exit_price, result = target, "WIN"
+            if exit_price is None:
+                continue
+            gross_r = TARGET_R if result == "WIN" else -1.0
+            realized_r = (exit_price - entry) / risk if side == "BUY" else (entry - exit_price) / risk
+            cost_r = self._cost_in_price(entry) / risk
+            return {
+                "trade_id": f"{self.asset}:{combination}:{signal_time}:{side}", "asset": self.asset,
+                "combination": combination, "combination_label": COMBINATIONS[combination]["label"],
+                "side": side, "signal_time": signal_time, "entry_time": int(bar.get("t", 0)),
+                "exit_time": int(bar.get("t", 0)), "entry_price": round(entry, 8),
+                "stop_loss": round(stop, 8), "take_profit": round(target, 8), "exit_price": round(exit_price, 8),
+                "result": result, "result_r": round(gross_r, 4), "realized_price_r": round(realized_r, 4),
+                "cost_r": round(cost_r, 6), "net_result_r": round(realized_r - cost_r, 4),
+                "exit_reason": "STOP_LOSS" if result == "LOSS" else "TAKE_PROFIT",
+            }
         return None
 
-    def backtest(self, candles: list[dict[str, Any]], timeframe: str) -> dict[str, Any]:
-        data = self._validate(candles)
-        if len(data) < MIN_BARS + 2:
-            return self._empty_backtest(timeframe, len(data), "Not enough completed historical candles")
+    def _backtest(self, data: dict[str, list[dict[str, Any]]], combination: str) -> dict[str, Any]:
+        minute = data.get("1m", [])
+        needed = set((*COMBINATIONS[combination]["higher"], *COMBINATIONS[combination]["middle"], "5m", "1m"))
+        missing = [tf for tf in sorted(needed) if len(data.get(tf, [])) < MIN_BARS]
+        if len(minute) < MIN_BARS + 2 or missing:
+            reason = "Not enough completed 1M candles." if len(minute) < MIN_BARS + 2 else f"Insufficient closed history for: {', '.join(missing)}."
+            return {
+                "combination": combination, "combination_label": COMBINATIONS[combination]["label"],
+                "historical": _summary([], len(minute), "INSUFFICIENT DATA"),
+                "in_sample": _summary([], 0, "INSUFFICIENT DATA"), "out_of_sample": _summary([], 0, "INSUFFICIENT DATA"),
+                "trades": [], "reason": reason,
+            }
+        opens = {tf: [int(x["t"]) for x in rows] for tf, rows in data.items()}
+        start_time, end_time = int(minute[0]["t"]), int(minute[-1]["t"]) + TIMEFRAME_MS["1m"]
+        split_time = start_time + int((end_time - start_time) * 0.70)
         trades: list[dict[str, Any]] = []
-        next_available_index = MIN_BARS - 1
-        unclosed = 0
-        for i in range(MIN_BARS - 1, len(data) - 1):
-            if i < next_available_index:
+        next_available = MIN_BARS + 1
+        open_setups = 0
+        for i in range(MIN_BARS + 1, len(minute) - 1):
+            if i < next_available:
                 continue
-            evaluation = self._evaluate_clean(data, i)
-            if not evaluation.side or evaluation.stop_anchor is None:
+            signal_close_time = int(minute[i]["t"]) + TIMEFRAME_MS["1m"]
+            view = self._asof(data, opens, signal_close_time)
+            evaluation = self._evaluate_combination(view, combination)
+            side, stop, trigger = evaluation.get("side"), evaluation.get("stop_anchor"), evaluation.get("trigger_price")
+            if not side or stop is None or trigger is None:
                 continue
             entry_index = i + 1
-            entry = float(data[entry_index]["o"])
-            trade = self._simulate_trade(
-                data, entry_index, evaluation.side, entry, evaluation.stop_anchor,
-                int(data[i]["t"]), timeframe, self.asset,
-            )
-            if trade is None:
-                unclosed += 1
-                next_available_index = len(data)
+            next_open = float(minute[entry_index]["o"])
+            if (side == "BUY" and next_open < float(trigger)) or (side == "SELL" and next_open > float(trigger)):
                 continue
+            if (side == "BUY" and float(stop) >= next_open) or (side == "SELL" and float(stop) <= next_open):
+                continue
+            trade = self._simulate_trade(minute, entry_index, side, next_open, float(stop), signal_close_time, combination)
+            if trade is None:
+                open_setups += 1
+                next_available = len(minute)
+                continue
+            trade["sample"] = "IN_SAMPLE" if signal_close_time < split_time else "OUT_OF_SAMPLE"
             trades.append(trade)
-            next_available_index = next((j for j in range(entry_index + 1, len(data)) if int(data[j]["t"]) == trade["exit_time"]), entry_index) + 1
+            exit_index = next((j for j in range(entry_index, len(minute)) if int(minute[j]["t"]) == trade["exit_time"]), entry_index)
+            next_available = exit_index + 1
 
-        results = [float(x["result_r"]) for x in trades]
-        wins = [x for x in trades if x["result"] == "WIN"]
-        losses = [x for x in trades if x["result"] == "LOSS"]
-        winning_r = sum(max(0.0, x) for x in results)
-        losing_r = sum(abs(min(0.0, x)) for x in results)
-        net_r = winning_r - losing_r
-        equity = peak = 0.0
-        max_dd = 0.0
-        for value in results:
-            equity += value
-            peak = max(peak, equity)
-            max_dd = max(max_dd, peak - equity)
-        max_win_streak = max_loss_streak = win_streak = loss_streak = 0
-        for trade in trades:
-            if trade["result"] == "WIN":
-                win_streak += 1
-                loss_streak = 0
-            else:
-                loss_streak += 1
-                win_streak = 0
-            max_win_streak = max(max_win_streak, win_streak)
-            max_loss_streak = max(max_loss_streak, loss_streak)
-        avg_win = sum(float(x["result_r"]) for x in wins) / len(wins) if wins else None
-        avg_loss = losing_r / len(losses) if losses else None
-        closed = len(trades)
+        historical = _summary(trades, len(minute))
+        split_index = bisect.bisect_left(opens["1m"], split_time)
+        in_trades = [x for x in trades if x["sample"] == "IN_SAMPLE"]
+        out_trades = [x for x in trades if x["sample"] == "OUT_OF_SAMPLE"]
+        in_sample = _summary(in_trades, split_index)
+        out_sample = _summary(out_trades, len(minute) - split_index)
+        if len(in_trades) < MIN_SPLIT_TRADES:
+            in_sample["status"] = "INSUFFICIENT DATA"
+            in_sample["win_rate_pct"] = None
+        if len(out_trades) < MIN_SPLIT_TRADES:
+            out_sample["status"] = "INSUFFICIENT DATA"
+            out_sample["win_rate_pct"] = None
+        historical["open_unclosed_setups"] = open_setups
+        costs_applied = bool(self.fee_bps_per_side or self.spread_bps or self.slippage_bps_per_side)
+        historical["costs"] = {
+            "fee_bps_per_side": self.fee_bps_per_side, "spread_bps": self.spread_bps,
+            "slippage_bps_per_side": self.slippage_bps_per_side, "included": costs_applied,
+            "reason": "Configured estimates applied from AST_FEE_BPS_PER_SIDE, AST_HISTORICAL_SPREAD_BPS and AST_SLIPPAGE_BPS_PER_SIDE." if costs_applied else "Historical bid/ask spread, account fee tier and execution slippage are not in candle OHLC data; no costs were invented or applied.",
+        }
+        historical["trades"] = trades
         return {
-            "timeframe": timeframe,
-            "status": "CALCULATED",
-            "bars_available": len(data),
-            "bars_tested": len(data),
-            "first_candle_time": int(data[0]["t"]),
-            "last_candle_time": int(data[-1]["t"]),
-            "total_historical_trades": closed,
-            "total_winning_trades": len(wins),
-            "total_losing_trades": len(losses),
-            "open_unclosed_setups": unclosed,
-            "win_rate_pct": round(len(wins) / closed * 100.0, 2) if closed else None,
-            "loss_rate_pct": round(len(losses) / closed * 100.0, 2) if closed else None,
-            "actual_risk_reward_ratio": round(avg_win / avg_loss, 4) if avg_win is not None and avg_loss else None,
-            "target_r": TARGET_R,
-            "total_winning_r": round(winning_r, 4),
-            "total_losing_r": round(losing_r, 4),
-            "net_profit_loss_r": round(net_r, 4),
-            "maximum_drawdown_r": round(max_dd, 4),
-            "maximum_consecutive_wins": max_win_streak,
-            "maximum_consecutive_losses": max_loss_streak,
-            "profit_factor": round(winning_r / losing_r, 4) if losing_r else (None if not winning_r else "INF"),
-            "average_winning_r": round(avg_win, 4) if avg_win is not None else None,
-            "average_losing_r": round(avg_loss, 4) if avg_loss is not None else None,
-            "costs": {"fees": "NOT INCLUDED", "spread": "NOT INCLUDED", "slippage": "NOT INCLUDED", "reason": "Historical bid/ask and account-specific fee data are not available in the candle dataset."},
-            "assumptions": ["Signal uses only completed candles up to its timestamp.", "Entry is the next candle open.", "Minimum target is 2R from the actual simulated entry and structure stop.", "If SL and TP are both inside one candle and lower-timeframe data is unavailable, SL is counted first.", "No future candles or lookahead values are used."],
+            "combination": combination, "combination_label": COMBINATIONS[combination]["label"],
+            "historical": historical, "in_sample": in_sample, "out_of_sample": out_sample,
             "trades": trades,
+            "split_method": "Chronological 70% in-sample / 30% out-of-sample; no parameters are fitted on the test period.",
+            "reason": None,
         }
 
-    @staticmethod
-    def _empty_backtest(timeframe: str, bars: int, reason: str) -> dict[str, Any]:
+    def _forward_update(self, combination: str, one_minute: list[dict[str, Any]], live: dict[str, Any], live_price: float | None) -> dict[str, Any]:
+        active = self._forward_active.get(combination)
+        if active:
+            last_seen = int(active.get("last_processed_time", active["signal_time"]))
+            for bar in one_minute:
+                stamp = int(bar["t"])
+                if stamp <= last_seen:
+                    continue
+                op, high, low = float(bar["o"]), float(bar["h"]), float(bar["l"])
+                side, stop, target = active["side"], float(active["stop_loss"]), float(active["take_profit"])
+                exit_price = None
+                outcome = None
+                if (side == "BUY" and op <= stop) or (side == "SELL" and op >= stop):
+                    exit_price, outcome = op, "LOSS"
+                elif (side == "BUY" and op >= target) or (side == "SELL" and op <= target):
+                    exit_price, outcome = op, "WIN"
+                else:
+                    stop_hit = low <= stop if side == "BUY" else high >= stop
+                    target_hit = high >= target if side == "BUY" else low <= target
+                    if stop_hit:
+                        exit_price, outcome = stop, "LOSS"
+                    elif target_hit:
+                        exit_price, outcome = target, "WIN"
+                active["last_processed_time"] = stamp
+                if exit_price is not None and outcome:
+                    risk, entry = float(active["risk_distance"]), float(active["entry_price"])
+                    realized = (exit_price - entry) / risk if side == "BUY" else (entry - exit_price) / risk
+                    cost_r = self._cost_in_price(entry) / risk
+                    active.update({
+                        "exit_time": stamp, "exit_price": exit_price, "result": outcome,
+                        "result_r": TARGET_R if outcome == "WIN" else -1.0,
+                        "realized_price_r": realized, "cost_r": cost_r, "net_result_r": realized - cost_r,
+                    })
+                    self._forward_completed[combination].append(active.copy())
+                    if len(self._forward_completed[combination]) > 1000:
+                        self._forward_completed[combination] = self._forward_completed[combination][-1000:]
+                    self._forward_active.pop(combination, None)
+                    break
+
+        if combination not in self._forward_active and live.get("side") and live.get("stop_anchor") is not None and live.get("signal_time") is not None and live_price is not None and live_price > 0:
+            signal_id = f"{self.asset}:{combination}:{live['signal_time']}:{live['side']}"
+            side, entry = live["side"], float(live_price)
+            trigger, stop = float(live["trigger_price"]), float(live["stop_anchor"])
+            valid_trigger = entry >= trigger if side == "BUY" else entry <= trigger
+            risk = entry - stop if side == "BUY" else stop - entry
+            if signal_id not in self._forward_seen and valid_trigger and risk > 0 and risk <= entry * 0.10:
+                target = entry + TARGET_R * risk if side == "BUY" else entry - TARGET_R * risk
+                self._forward_active[combination] = {
+                    "trade_id": signal_id, "asset": self.asset, "combination": combination, "side": side,
+                    "signal_time": int(live["signal_time"]), "entry_time": int(live["signal_time"]) + TIMEFRAME_MS["1m"],
+                    "last_processed_time": int(live["signal_time"]), "entry_price": entry,
+                    "stop_loss": stop, "take_profit": target, "risk_distance": risk, "result": "OPEN",
+                }
+                self._forward_seen.add(signal_id)
+
+        completed = self._forward_completed[combination]
+        summary = _summary(completed, len(one_minute))
+        summary["active_trades"] = 1 if combination in self._forward_active else 0
+        summary["tracking"] = "PROCESS MEMORY · PAPER ONLY · RESETS ON SERVICE RESTART"
+        summary["status"] = "INSUFFICIENT DATA" if len(completed) < MIN_REPORT_TRADES else "FORWARD TESTING"
+        if len(completed) < MIN_REPORT_TRADES:
+            summary["win_rate_pct"] = None
+        return summary
+
+    def snapshot(self, candles_by_tf: dict[str, Any], live_price: float | None = None, live_spread: float | None = None) -> dict[str, Any]:
+        data = {tf: _clean_candles(candles_by_tf.get(tf, [])) for tf in TIMEFRAME_ORDER}
+        signature = self._signature(data)
+        if any(self._backtest_signatures.get(combo) != signature for combo in COMBINATIONS):
+            for combo in COMBINATIONS:
+                self._backtest_cache[combo] = self._backtest(data, combo)
+                self._backtest_signatures[combo] = signature
+        one_minute = data.get("1m", [])
+        if one_minute:
+            eval_time = int(one_minute[-1]["t"]) + TIMEFRAME_MS["1m"]
+            opens = {tf: [int(x["t"]) for x in rows] for tf, rows in data.items()}
+            asof = self._asof(data, opens, eval_time)
+        else:
+            eval_time, asof = None, data
+
+        combinations: dict[str, Any] = {}
+        for combo in COMBINATIONS:
+            live = self._evaluate_combination(asof, combo)
+            live["evaluation_close_time"] = eval_time
+            if live.get("side") and live.get("stop_anchor") is not None and live.get("trigger_price") is not None:
+                entry = _number(live_price, _number(one_minute[-1]["c"])) if one_minute else 0.0
+                trigger, stop, side = float(live["trigger_price"]), float(live["stop_anchor"]), live["side"]
+                valid_trigger = entry >= trigger if side == "BUY" else entry <= trigger
+                risk = entry - stop if side == "BUY" else stop - entry
+                if not valid_trigger or risk <= 0:
+                    live["status"], live["side"] = "WAITING", None
+                    live["reason"] = "Trigger was crossed but live price has returned through the trigger/stop. Pending setup cancelled."
+                else:
+                    target = entry + TARGET_R * risk if side == "BUY" else entry - TARGET_R * risk
+                    live["trade_plan"] = {
+                        "side": side, "entry_price": round(entry, 8), "trigger_price": round(trigger, 8),
+                        "stop_loss": round(stop, 8), "take_profit": round(target, 8), "risk_reward": TARGET_R,
+                        "risk_distance": round(risk, 8), "signal_time": live.get("signal_time"), "timeframe": "1m",
+                        "execution": "Closed 1M confirmation followed by live reference price; paper plan only.",
+                        "live_spread": live_spread,
+                    }
+            live["forward_testing"] = self._forward_update(combo, one_minute, live, live_price)
+            combinations[combo] = {
+                "combination": combo, "label": COMBINATIONS[combo]["label"], "live": live,
+                "historical": self._backtest_cache[combo]["historical"],
+                "in_sample": self._backtest_cache[combo]["in_sample"],
+                "out_of_sample": self._backtest_cache[combo]["out_of_sample"],
+                "forward_testing": live["forward_testing"], "backtest_reason": self._backtest_cache[combo].get("reason"),
+            }
+        reports = [self._backtest_cache[x] for x in COMBINATIONS]
+        all_trades = [trade for report in reports for trade in report.get("trades", [])]
+        combined_historical = _summary(all_trades, len(one_minute))
+        all_forward = [trade for combo in COMBINATIONS for trade in self._forward_completed[combo]]
+        combined_forward = _summary(all_forward, len(one_minute))
+        combined_forward["status"] = "INSUFFICIENT DATA" if len(all_forward) < MIN_REPORT_TRADES else "FORWARD TESTING"
+        if len(all_forward) < MIN_REPORT_TRADES:
+            combined_forward["win_rate_pct"] = None
         return {
-            "timeframe": timeframe, "status": "WARMING UP", "bars_available": bars,
-            "bars_tested": 0, "total_historical_trades": 0, "total_winning_trades": 0,
-            "total_losing_trades": 0, "win_rate_pct": None, "loss_rate_pct": None,
-            "actual_risk_reward_ratio": None, "total_winning_r": 0.0,
-            "total_losing_r": 0.0, "net_profit_loss_r": 0.0,
-            "maximum_drawdown_r": 0.0, "maximum_consecutive_wins": 0,
-            "maximum_consecutive_losses": 0, "profit_factor": None,
-            "trades": [], "reason": reason,
+            "asset": self.asset, "strategy_name": "AST 9/15 EMA Advanced Multi-Timeframe Trading Engine",
+            "status": "READY" if one_minute and len(one_minute) >= MIN_BARS else "INSUFFICIENT DATA",
+            "live_reference_price": live_price, "combinations": combinations,
+            "overall_historical": combined_historical, "overall_forward_testing": combined_forward,
+            "timeframe_data": {tf: len(data.get(tf, [])) for tf in TIMEFRAME_ORDER},
+            "backtest_scope": {
+                "combinations": {key: COMBINATIONS[key]["label"] for key in COMBINATIONS},
+                "maximum_bars_per_timeframe": BACKTEST_LIMIT, "closed_candles_only": True,
+                "shared_live_and_historical_evaluator": True,
+                "split": "70% chronological in-sample / 30% out-of-sample",
+            },
         }
 
-    def snapshot(self, candles_by_tf: dict[str, Any], live_price: float | None = None) -> dict[str, Any]:
-        timeframes: dict[str, Any] = {}
-        performance: dict[str, Any] = {}
-        for tf in TIMEFRAME_ORDER:
-            raw = list(candles_by_tf.get(tf, []))
-            clean = self._validate(raw)
-            if clean:
-                sig = (len(clean), int(clean[0]["t"]), int(clean[-1]["t"]))
-            else:
-                sig = (0, None, None)
-            if self._backtest_signatures.get(tf) != sig:
-                self._backtest_cache[tf] = self.backtest(clean, tf)
-                self._backtest_signatures[tf] = sig
-            performance[tf] = {k: v for k, v in self._backtest_cache.get(tf, self._empty_backtest(tf, len(clean), "Backtest queued")).items() if k != "trades"}
-            timeframes[tf] = self.live_timeframe(clean, tf, live_price)
-        one_minute = timeframes.get("1m", {})
-        live_status = one_minute.get("status", "WARMING UP")
-        return {
-            "asset": self.asset,
-            "strategy_name": "Advanced Multi-Strategy Trading System",
-            "live_reference_price": live_price,
-            "status": live_status,
-            "reason": one_minute.get("reason", "Waiting for completed candles"),
-            "timeframe_results": timeframes,
-            "historical_performance": performance,
-            "backtest_scope": {"timeframes": list(TIMEFRAME_ORDER), "maximum_bars_per_timeframe": BACKTEST_LIMIT, "same_logic_as_live": True, "results_saved_in_process_cache": True},
-        }
+    def historical_trades(self, combination: str) -> dict[str, Any]:
+        key = str(combination).upper()
+        if key not in COMBINATIONS:
+            return {"combination": key, "status": "INSUFFICIENT DATA", "trades": [], "reason": "Unsupported combination. Use A, B or C."}
+        return self._backtest_cache.get(key, {
+            "combination": key, "status": "INSUFFICIENT DATA", "trades": [], "reason": "Backtest has not completed yet.",
+        })
 
-    def historical_trades(self, timeframe: str) -> dict[str, Any]:
-        return self._backtest_cache.get(timeframe, self._empty_backtest(timeframe, 0, "Backtest not calculated yet"))
+
+def aggregate_reports(reports: list[dict[str, Any]], label: str = "OVERALL COMBINED") -> dict[str, Any]:
+    trades = [trade for report in reports for trade in report.get("trades", [])]
+    bars = sum(int((report.get("historical") or {}).get("bars_tested", 0)) for report in reports)
+    return {
+        "label": label, "historical": _summary(trades, bars),
+        "in_sample": _summary([x for x in trades if x.get("sample") == "IN_SAMPLE"], bars),
+        "out_of_sample": _summary([x for x in trades if x.get("sample") == "OUT_OF_SAMPLE"], bars),
+    }
