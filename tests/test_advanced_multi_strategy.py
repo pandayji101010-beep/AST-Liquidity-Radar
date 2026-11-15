@@ -57,7 +57,10 @@ class AdvancedMultiStrategyTests(unittest.TestCase):
         self.assertEqual(plan["take_profit"], 102.0)
 
     def test_gap_exit_keeps_fixed_strategy_r_and_records_realized_price_r(self):
-        candle = [{"t": 60_000, "o": 103.0, "h": 104.0, "l": 102.5, "c": 103.5, "v": 10.0}]
+        candle = [
+            {"t": 60_000, "o": 100.0, "h": 101.0, "l": 99.5, "c": 100.5, "v": 10.0},
+            {"t": 120_000, "o": 103.0, "h": 104.0, "l": 102.5, "c": 103.5, "v": 10.0},
+        ]
         trade = self.engine._simulate_trade(candle, 0, "BUY", 100.0, 99.0, 0, "1m", "BTC")
         self.assertEqual(trade["result"], "WIN")
         self.assertEqual(trade["result_r"], 2.0)
