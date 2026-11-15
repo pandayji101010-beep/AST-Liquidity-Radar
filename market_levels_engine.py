@@ -329,33 +329,47 @@ def _rejection_and_break(
     timeframe: str,
     lookback: int,
 ) -> bool:
-    if len(candles) < lookback + 3:
+    if len(candles) < lookback + 5:
         return False
-    candle = candles[-1]
     atr = _atr(candles)
     if atr <= 0:
         return False
-    body, close_position, upper_wick, lower_wick = _candle_shape(candle)
-    touched = (
-        float(candle["l"]) <= float(level["zone_high"])
-        and float(candle["h"]) >= float(level["zone_low"])
-    )
+    current = candles[-1]
     previous = candles[-lookback - 1:-1]
-    if side == "BUY":
-        rejection = (
-            touched and float(candle["c"]) > float(candle["o"])
-            and lower_wick >= max(body * 0.70, atr * 0.05)
-            and close_position >= 0.64
+    recent_tests = candles[-lookback - 1:-1]
+    rejection_found = False
+    for candle in recent_tests:
+        body, close_position, upper_wick, lower_wick = _candle_shape(candle)
+        touched = (
+            float(candle["l"]) <= float(level["zone_high"])
+            and float(candle["h"]) >= float(level["zone_low"])
         )
-        structure_break = float(candle["c"]) > max(float(row["h"]) for row in previous)
-        return rejection and structure_break
-    rejection = (
-        touched and float(candle["c"]) < float(candle["o"])
-        and upper_wick >= max(body * 0.70, atr * 0.05)
-        and close_position <= 0.36
+        if side == "BUY":
+            rejection_found = rejection_found or (
+                touched and float(candle["c"]) > float(candle["o"])
+                and lower_wick >= max(body * 0.70, atr * 0.05)
+                and close_position >= 0.62
+            )
+        else:
+            rejection_found = rejection_found or (
+                touched and float(candle["c"]) < float(candle["o"])
+                and upper_wick >= max(body * 0.70, atr * 0.05)
+                and close_position <= 0.38
+            )
+    body, close_position, _upper, _lower = _candle_shape(current)
+    if side == "BUY":
+        structure_break = float(current["c"]) > max(float(row["h"]) for row in previous)
+        confirmation = (
+            float(current["c"]) > float(current["o"])
+            and body >= atr * 0.05 and close_position >= 0.60
+        )
+        return rejection_found and structure_break and confirmation
+    structure_break = float(current["c"]) < min(float(row["l"]) for row in previous)
+    confirmation = (
+        float(current["c"]) < float(current["o"])
+        and body >= atr * 0.05 and close_position <= 0.40
     )
-    structure_break = float(candle["c"]) < min(float(row["l"]) for row in previous)
-    return rejection and structure_break
+    return rejection_found and structure_break and confirmation
 
 
 def _entry_confirmation(
