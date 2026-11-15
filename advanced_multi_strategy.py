@@ -214,6 +214,10 @@ def _pullback_confirmation(candles: list[dict[str, Any]], side: str) -> dict[str
     if not trend["ready"]:
         result["status"] = "INSUFFICIENT DATA"
         return result
+    if trend["strength"] == "WEAK":
+        result["status"] = "SETUP REJECTED"
+        result["reason"] = "5M EMA separation/slope is weak or sideways; pullback entry is blocked."
+        return result
     expected = "BULLISH" if side == "BUY" else "BEARISH"
     if trend["direction"] != expected:
         result["status"] = "SETUP REJECTED"
@@ -247,8 +251,8 @@ def _entry_trigger(candles: list[dict[str, Any]], side: str) -> dict[str, Any]:
     confirmation, candidate = candles[-1], candles[-2]
     candidate_prefix = candles[:-1]
     trend = _trend_state(candidate_prefix)
-    if not trend["ready"] or trend["direction"] != ("BULLISH" if side == "BUY" else "BEARISH"):
-        result["reason"] = "1M EMA9/15 alignment or slope is not confirmed in the required direction."
+    if not trend["ready"] or trend["strength"] == "WEAK" or trend["direction"] != ("BULLISH" if side == "BUY" else "BEARISH"):
+        result["reason"] = "1M EMA9/15 alignment, slope and trend strength are not confirmed in the required direction."
         return result
     atr, ema9, ema15 = float(trend["atr"]), float(trend["ema9"]), float(trend["ema15"])
     zone_low, zone_high = min(ema9, ema15) - atr * 0.25, max(ema9, ema15) + atr * 0.20
@@ -397,7 +401,8 @@ class AdvancedMultiStrategyEngine:
         values: list[Any] = []
         for tf in TIMEFRAME_ORDER:
             rows = data.get(tf, [])
-            values.extend((tf, len(rows), int(rows[0]["t"]) if rows else None, int(rows[-1]["t"]) if rows else None))
+            last_bar = tuple(rows[-1].get(key) for key in ("o", "h", "l", "c", "v")) if rows else None
+            values.extend((tf, len(rows), int(rows[0]["t"]) if rows else None, int(rows[-1]["t"]) if rows else None, last_bar))
         return tuple(values)
 
     @staticmethod
