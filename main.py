@@ -25,7 +25,7 @@ from historical_sources import (
     load_binance_tradfi_gold_history,
     load_binance_tradfi_gold_live,
 )
-from advanced_multi_strategy import AdvancedMultiStrategyEngine, TIMEFRAME_ORDER
+from advanced_multi_strategy import AdvancedMultiStrategyEngine, TIMEFRAME_ORDER, COMBINATIONS, aggregate_reports
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -1363,29 +1363,46 @@ _strategy_scanner_cache_lock: asyncio.Lock | None = None
 
 
 async def refresh_strategy_scanner_cache() -> dict[str, Any]:
-    """Refresh live signals and cached full-history results outside the request path."""
+    """Refresh AST 9/15 EMA live signals and all three historical replays."""
     global _strategy_scanner_cache, _strategy_scanner_cache_lock
     if _strategy_scanner_cache_lock is None:
         _strategy_scanner_cache_lock = asyncio.Lock()
 
     async with _strategy_scanner_cache_lock:
         assets: list[dict[str, Any]] = []
+        reports_by_combination: dict[str, list[dict[str, Any]]] = {key: [] for key in COMBINATIONS}
+        all_reports: list[dict[str, Any]] = []
         for state in states.values():
+            best_bid = max(state.bids) if state.bids else None
+            best_ask = min(state.asks) if state.asks else None
+            orderbook_spread = (best_ask - best_bid) if best_bid is not None and best_ask is not None else None
+            live_spread = state.vantage_spread if state.key == "GOLD" and state.vantage_spread is not None else orderbook_spread
             result = await asyncio.to_thread(
                 state.advanced_strategy_engine.snapshot,
                 state.candles,
                 state.mark_price,
+                live_spread,
             )
             result["data_source"] = state.data_source or "Source not reported"
             result["broker_candle_feed"] = bool(state.broker_candle_feed)
             result["broker_candle_time"] = state.broker_candle_ts
             assets.append(result)
+            for combination in COMBINATIONS:
+                report = state.advanced_strategy_engine.historical_trades(combination)
+                reports_by_combination[combination].append(report)
+                all_reports.append(report)
             await asyncio.sleep(0)
 
+        combined_by_combination = {
+            combination: aggregate_reports(reports, f"BTC + GOLD · {combination}")
+            for combination, reports in reports_by_combination.items()
+        }
         _strategy_scanner_cache = {
             "time": now_ms(),
-            "strategy_name": "Advanced Multi-Strategy Trading System",
+            "strategy_name": "AST 9/15 EMA Advanced Multi-Timeframe Trading Engine",
             "assets": assets,
+            "combined_by_combination": combined_by_combination,
+            "overall_combined": aggregate_reports(all_reports, "BTC + GOLD · ALL COMBINATIONS"),
             "status": "READY" if assets else "WARMING UP",
         }
         return _strategy_scanner_cache
@@ -1405,26 +1422,27 @@ async def strategy_snapshot_worker() -> None:
 
 @app.get("/api/strategy")
 async def strategy_scanner() -> dict[str, Any]:
-    """Return the latest six-engine live and historical strategy snapshot."""
+    """Return AST 9/15 EMA live and historical multi-timeframe results."""
     if _strategy_scanner_cache is not None:
         return _strategy_scanner_cache
     return {
         "time": now_ms(),
-        "strategy_name": "Advanced Multi-Strategy Trading System",
+        "strategy_name": "AST 9/15 EMA Advanced Multi-Timeframe Trading Engine",
         "assets": [],
         "status": "WARMING UP",
     }
 
 
-@app.get("/api/backtest/{asset}/{timeframe}")
-async def historical_backtest(asset: str, timeframe: str) -> dict[str, Any]:
-    """Return the complete deterministic historical trade log for one market/timeframe."""
+@app.get("/api/backtest/{asset}/{combination}")
+async def historical_backtest(asset: str, combination: str) -> dict[str, Any]:
+    """Return the complete deterministic historical trade log for market/combo A, B or C."""
     key = asset.upper()
+    combo = combination.upper()
     if key not in states:
         raise HTTPException(status_code=404, detail="Unknown market")
-    if timeframe not in TIMEFRAMES:
-        raise HTTPException(status_code=404, detail="Unsupported timeframe")
-    result = states[key].advanced_strategy_engine.historical_trades(timeframe)
+    if combo not in COMBINATIONS:
+        raise HTTPException(status_code=404, detail="Unsupported combination. Use A, B or C.")
+    result = states[key].advanced_strategy_engine.historical_trades(combo)
     return {"asset": key, **result}
 
 
@@ -1476,49 +1494,51 @@ def _strategy_alert_price(asset: str, value: Any) -> str:
 
 
 async def strategy_alert_worker() -> None:
-    """Send one deduplicated Telegram alert for each newly confirmed 1m six-engine setup."""
+    """Send one deduplicated Telegram alert for each newly confirmed 9/15 EMA combo."""
     bootstrapped_assets: set[str] = set()
     while True:
         try:
             payload = await strategy_scanner()
             for result in payload.get("assets", []):
                 asset = str(result.get("asset") or "MARKET").upper()
-                frames = result.get("timeframe_results") or {}
-                execution = frames.get("1m") or {}
+                combos = result.get("combinations") or {}
                 if asset not in bootstrapped_assets:
-                    if frames:
-                        signal_time = execution.get("candle_time")
-                        side = execution.get("side")
+                    for combo, item in combos.items():
+                        live = item.get("live") or {}
+                        signal_time = live.get("signal_time")
+                        side = live.get("side")
                         if signal_time and side:
-                            strategy_alert_seen[asset].add(f"{asset}:1m:{signal_time}:{side}")
+                            strategy_alert_seen[asset].add(f"{asset}:{combo}:{signal_time}:{side}")
+                    if combos:
                         bootstrapped_assets.add(asset)
                     continue
 
-                side = execution.get("side")
-                plan = execution.get("trade_plan") or {}
-                signal_time = execution.get("candle_time")
-                if execution.get("status") != "SIGNAL READY" or not side or not plan or not signal_time:
-                    continue
-                alert_id = f"{asset}:1m:{signal_time}:{side}"
-                if alert_id in strategy_alert_seen[asset]:
-                    continue
-                message = (
-                    f"AST ADVANCED SIX-ENGINE SYSTEM | {asset}\n"
-                    f"{side} SETUP CONFIRMED · 1M\n"
-                    f"Entry: {_strategy_alert_price(asset, plan.get('entry_price'))}\n"
-                    f"Stop Loss: {_strategy_alert_price(asset, plan.get('stop_loss'))}\n"
-                    f"Take Profit (2R): {_strategy_alert_price(asset, plan.get('take_profit'))}\n"
-                    "Confirmed by at least four aligned engines, including Price Action and a trigger engine.\n"
-                    "SIMULATED PLAN ONLY — no broker order is placed."
-                )
-                if await send_telegram(message):
-                    strategy_alert_seen[asset].add(alert_id)
+                for combo, item in combos.items():
+                    live = item.get("live") or {}
+                    plan = live.get("trade_plan") or {}
+                    side = live.get("side")
+                    signal_time = live.get("signal_time")
+                    if live.get("status") not in ("BUY", "SELL") or not side or not plan or not signal_time:
+                        continue
+                    alert_id = f"{asset}:{combo}:{signal_time}:{side}"
+                    if alert_id in strategy_alert_seen[asset]:
+                        continue
+                    message = (
+                        f"AST 9/15 EMA MTF | {asset} | COMBINATION {combo}\n"
+                        f"{side} CONFIRMED · 4H/1H → 30M/15M → 5M → 1M\n"
+                        f"Entry: {_strategy_alert_price(asset, plan.get('entry_price'))}\n"
+                        f"Stop Loss: {_strategy_alert_price(asset, plan.get('stop_loss'))}\n"
+                        f"Take Profit (2R): {_strategy_alert_price(asset, plan.get('take_profit'))}\n"
+                        "Paper plan only — no broker order is placed."
+                    )
+                    if await send_telegram(message):
+                        strategy_alert_seen[asset].add(alert_id)
 
             await asyncio.sleep(STRATEGY_ALERT_POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Advanced strategy Telegram alert worker failed")
+            log.exception("AST 9/15 EMA Telegram alert worker failed")
             await asyncio.sleep(max(5.0, STRATEGY_ALERT_POLL_SECONDS))
 
 
@@ -1536,21 +1556,22 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "Advanced Multi-Strategy: Trend + Liquidity + Breakout + Range + Momentum + Price Action; one shared point-in-time evaluator for live and backtest.",
-        "strategy_engines": {
-            "Trend": "Confirmed HH/HL or LH/LL structure aligned with EMA20/EMA50.",
-            "Liquidity": "Historical swing/equal-high-low pools and sweep rejection followed by structure reclaim.",
-            "Breakout": "Displacement close beyond a prior range or a confirmed breakout retest, with volume support when available.",
-            "Range": "Compressed-range edge rejection only; mid-range entries are blocked.",
-            "Momentum": "RSI, EMA slope, candle strength, divergence and exhaustion.",
-            "Price Action": "BOS/CHOCH plus engulfing/rejection, FVG or order-block reaction.",
+        "strategy": "AST 9/15 EMA: HTF trend (4H/1H), middle setups (30M/15M), 5M pullback and 1M rejection + confirmed BOS trigger.",
+        "strategy_engine": {
+            "higher_timeframe": "EMA9/EMA15 alignment, slope, separation and strength on completed 4H/1H bars.",
+            "middle_timeframe": "EMA crossover/continuation, EMA-zone pullback, rejection and momentum on 30M/15M.",
+            "entry_timeframe": "5M EMA pullback confirmation plus 1M rejection, confirmed micro BOS and close through the trigger candle.",
+            "risk_management": "Structure-based swing stop and 2R target; invalid or missing stops are rejected.",
         },
-        "minimum_confirmations": 4,
         "minimum_risk_reward": 2.0,
-        "backtest_timeframes": list(TIMEFRAME_ORDER),
-        "backtest_entry": "Next completed candle open after the signal candle closes.",
+        "backtest_combinations": {
+            "A": "4H → 1H → 30M → 15M → 5M → 1M",
+            "B": "1H → 30M → 15M → 5M → 1M",
+            "C": "15M → 5M → 1M",
+        },
+        "backtest_entry": "Closed 1M trigger confirmation; enter next 1M open only if price has not returned through the trigger.",
         "backtest_history_limit": HISTORY_BARS,
-        "historical_trade_endpoint": "/api/backtest/{asset}/{timeframe}",
+        "historical_trade_endpoint": "/api/backtest/{asset}/{combination}",
 
 
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
@@ -1563,7 +1584,7 @@ async def config() -> dict[str, Any]:
             "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
             "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
-            "Each timeframe is backtested independently using completed candles only. Live and historical decisions call the same six-engine evaluator.",
+            "The AST 9/15 EMA live and historical engines use the same point-in-time evaluator; every higher-timeframe bar must be fully closed before it confirms a lower-timeframe signal.",
             "Historical entries are simulated at the next candle open; stop/target collisions in one candle assume stop first when lower-timeframe evidence is unavailable.",
         ],
     }
