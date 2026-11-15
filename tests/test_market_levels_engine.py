@@ -10,6 +10,7 @@ from market_levels_engine import (
     _merge_levels,
     _reaction_stats,
     _structure_bias,
+    _timeframe_bias,
 )
 
 
@@ -92,6 +93,31 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
             rows.append(candle((i + 1) * 60_000, op, max(op, close) + 0.08, min(op, close) - 0.08, close))
             previous = close
         self.assertEqual(_structure_bias(rows), "BULLISH")
+
+    def test_timeframe_bias_includes_history_present_projection_and_combined_bias(self):
+        rising = []
+        falling = []
+        for index in range(120):
+            up_close = 100.0 + index * 0.5
+            down_close = 200.0 - index * 0.5
+            rising.append(candle(
+                (index + 1) * 60_000,
+                up_close - 0.2, up_close + 0.2, up_close - 0.4, up_close,
+            ))
+            falling.append(candle(
+                (index + 1) * 60_000,
+                down_close + 0.2, down_close + 0.4, down_close - 0.2, down_close,
+            ))
+
+        bullish = _timeframe_bias(rising)
+        bearish = _timeframe_bias(falling)
+        self.assertEqual(set(bullish), {"historical", "present", "projected", "bias"})
+        self.assertEqual(bullish["present"], "BULLISH")
+        self.assertEqual(bullish["projected"], "BULLISH")
+        self.assertEqual(bullish["bias"], "BULLISH")
+        self.assertEqual(bearish["present"], "BEARISH")
+        self.assertEqual(bearish["projected"], "BEARISH")
+        self.assertEqual(bearish["bias"], "BEARISH")
 
     def test_snapshot_exposes_only_confirmed_levels_and_six_requested_fields(self):
         engine = HighConfidenceMarketLevelsEngine("GOLD")

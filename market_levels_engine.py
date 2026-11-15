@@ -321,6 +321,70 @@ def _higher_timeframe_bias(data: dict[str, list[dict[str, Any]]]) -> tuple[str, 
     return "MIXED", detail
 
 
+def _ema(values: list[float], period: int) -> float:
+    if not values:
+        return 0.0
+    alpha = 2.0 / (period + 1.0)
+    result = values[0]
+    for value in values[1:]:
+        result = alpha * value + (1.0 - alpha) * result
+    return result
+
+
+def _timeframe_bias(candles: list[dict[str, Any]]) -> dict[str, str]:
+    """Historical structure, present trend and a momentum-based forward projection."""
+    if len(candles) < 25:
+        return {
+            "historical": "NEUTRAL",
+            "present": "NEUTRAL",
+            "projected": "NEUTRAL",
+            "bias": "NEUTRAL",
+        }
+
+    closes = [float(row["c"]) for row in candles]
+    historical = _structure_bias(candles[-180:])
+
+    recent = closes[-min(120, len(closes)):]
+    ema20 = _ema(recent, 20)
+    ema50 = _ema(recent, 50)
+    prior_ema20 = _ema(recent[:-5], 20) if len(recent) > 25 else ema20
+    slope = ema20 - prior_ema20
+    last_close = closes[-1]
+    if last_close > ema20 and ema20 > ema50 and slope > 0:
+        present = "BULLISH"
+    elif last_close < ema20 and ema20 < ema50 and slope < 0:
+        present = "BEARISH"
+    else:
+        present = "NEUTRAL"
+
+    atr = _atr(candles)
+    momentum = last_close - closes[-6] if len(closes) >= 6 else 0.0
+    threshold = atr * 0.30
+    if atr > 0 and momentum > threshold and slope > 0:
+        projected = "BULLISH"
+    elif atr > 0 and momentum < -threshold and slope < 0:
+        projected = "BEARISH"
+    else:
+        projected = "NEUTRAL"
+
+    weights = {"historical": 0.35, "present": 0.40, "projected": 0.25}
+    score = sum(
+        weights[key] * (1 if value == "BULLISH" else -1 if value == "BEARISH" else 0)
+        for key, value in (
+            ("historical", historical),
+            ("present", present),
+            ("projected", projected),
+        )
+    )
+    overall = "BULLISH" if score >= 0.25 else "BEARISH" if score <= -0.25 else "NEUTRAL"
+    return {
+        "historical": historical,
+        "present": present,
+        "projected": projected,
+        "bias": overall,
+    }
+
+
 def _candle_shape(candle: dict[str, Any]) -> tuple[float, float, float, float]:
     op, high, low, close = (float(candle[key]) for key in ("o", "h", "l", "c"))
     span = max(high - low, 1e-12)
@@ -539,6 +603,10 @@ class HighConfidenceMarketLevelsEngine:
                 item["rank"] = rank
             levels = display
 
+        timeframe_bias = {
+            timeframe: _timeframe_bias(data.get(timeframe) or [])
+            for timeframe in TIMEFRAME_ORDER
+        }
         available = sum(len(data.get(tf) or []) for tf in ANALYSIS_TFS)
         ready = all(len(data.get(tf) or []) >= 32 for tf in ("1d", "4h", "1h", "30m", "15m"))
         status = "READY" if levels else "NO TRADE" if ready else "WARMING UP"
@@ -549,6 +617,7 @@ class HighConfidenceMarketLevelsEngine:
             "live_reference_price": round(price, 8) if price > 0 else None,
             "levels": levels,
             "timeframe_data": {timeframe: len(data.get(timeframe) or []) for timeframe in TIMEFRAME_ORDER},
+            "timeframe_bias": timeframe_bias,
             "higher_timeframe_structure": self._bias_cache[1],
             "higher_timeframe_bias": self._bias_cache[0],
             "history_ready": ready,
