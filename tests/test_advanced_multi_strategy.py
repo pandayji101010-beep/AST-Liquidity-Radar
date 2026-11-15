@@ -51,7 +51,13 @@ class AST915EMATests(unittest.TestCase):
         self.assertEqual(TIMEFRAME_ORDER, ("1m", "5m", "15m", "30m", "1h", "4h", "1d"))
 
     def test_asof_excludes_unclosed_higher_timeframe_bar(self):
-        data = {"1m": candles(5), "4h": candles(3, TIMEFRAME_MS["4h"])}
+        data = {
+            "1m": candles(5),
+            "4h": [
+                {"t": i * TIMEFRAME_MS["4h"], "o": 100 + i, "h": 101 + i, "l": 99 + i, "c": 100.5 + i, "v": 1}
+                for i in range(3)
+            ],
+        }
         opens = {tf: [int(x["t"]) for x in rows] for tf, rows in data.items()}
         before = self.engine._asof(data, opens, TIMEFRAME_MS["4h"] - 1)
         closed = self.engine._asof(data, opens, TIMEFRAME_MS["4h"])
@@ -108,7 +114,7 @@ class AST915EMATests(unittest.TestCase):
 
     def test_candle_cleanup_keeps_latest_duplicate_timestamp(self):
         rows = candles(3)
-        rows.append({**rows[-1], "c": rows[-1]["c"] + 0.1})
+        rows.append({**rows[-1], "h": rows[-1]["h"] + 0.1, "c": rows[-1]["c"] + 0.1})
         cleaned = _clean_candles(rows)
         self.assertEqual(len(cleaned), 3)
         self.assertAlmostEqual(cleaned[-1]["c"], rows[-1]["c"] + 0.1)
