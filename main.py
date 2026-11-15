@@ -20,13 +20,12 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ast_strategy import ASTStructureStrategy
 from historical_sources import (
     load_btc_um_history,
     load_binance_tradfi_gold_history,
     load_binance_tradfi_gold_live,
 )
-from ast_campaign_orchestrator import ASTFourEngineOrchestrator
+from advanced_multi_strategy import AdvancedMultiStrategyEngine, TIMEFRAME_ORDER
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -122,9 +121,11 @@ class AssetState:
     trend_lock_side: str | None = None
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
-    structure_engine: ASTStructureStrategy = field(default_factory=ASTStructureStrategy)
-    campaign_engine: ASTFourEngineOrchestrator = field(default_factory=ASTFourEngineOrchestrator)
+    advanced_strategy_engine: AdvancedMultiStrategyEngine = field(init=False)
     data_source: str | None = None
+
+    def __post_init__(self) -> None:
+        self.advanced_strategy_engine = AdvancedMultiStrategyEngine(self.key)
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
     binance_tradfi_stream_active: bool = False
@@ -320,15 +321,15 @@ states: dict[str, AssetState] = {
     key: AssetState(key=key, symbol=symbol) for key, symbol in SYMBOLS.items()
 }
 
-app = FastAPI(title="AST Institutional Liquidity Radar", version="2.0.0")
+app = FastAPI(title="AST Advanced Multi-Strategy Radar", version="3.0.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 http_client: httpx.AsyncClient | None = None
 background_tasks: list[asyncio.Task] = []
 last_alert_sent: dict[str, float] = defaultdict(float)
-CAMPAIGN_ALERT_POLL_SECONDS = 2.0
-CAMPAIGN_ALERTS_ENABLED = ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
-campaign_alert_seen: dict[str, set[str]] = defaultdict(set)
+STRATEGY_ALERT_POLL_SECONDS = 2.0
+STRATEGY_ALERTS_ENABLED = ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+strategy_alert_seen: dict[str, set[str]] = defaultdict(set)
 
 
 async def send_telegram(message: str) -> bool:
@@ -621,21 +622,8 @@ def build_reaction_levels(st: AssetState, timeframe: str) -> list[dict[str, Any]
             unique.append(item)
     return unique
 
-def build_structure_snapshot(st: AssetState) -> dict[str, Any]:
-    """Return the multi-timeframe structure analytics without the legacy Trap engine."""
-    result = st.structure_engine.snapshot(st.candles)
-    for setup in result.get("setups", []):
-        setup["asset"] = st.key
-    return result
-
-def build_a_plus_scanner(st: AssetState) -> list[dict[str, Any]]:
-    """Backward-compatible route name; now returns all timeframe strategy setups."""
-    return build_structure_snapshot(st).get("setups", [])
-
-
 def make_snapshot(key: str, tf: str) -> dict[str, Any]:
     st = states[key]
-    strategy = build_structure_snapshot(st)
     analysis = st.latest_analysis.get(tf, {"ready": False, "message": "Waiting for candles"})
     scores = calculate_scores(st, tf)
     liqs = st.liquidation_totals()
@@ -700,11 +688,6 @@ def make_snapshot(key: str, tf: str) -> dict[str, Any]:
         "basis_samples": len(st.basis_ratios),
         "adjusted_levels": mapped,
         "reaction_levels": build_reaction_levels(st, tf),
-        "a_plus_setups": strategy.get("setups", []),
-        "structure_timeframes": strategy.get("timeframes", {}),
-        "structure_zones": strategy.get("zones", []),
-        "liquidity_levels": strategy.get("liquidity", []),
-        "structure_events": strategy.get("events", []),
         "exchange_feed_fresh": exchange_fresh,
         "mark_age_seconds": round((now_ms() - st.mark_ts) / 1000, 1) if st.mark_ts else None,
         "book_age_seconds": round((now_ms() - st.book_ts) / 1000, 1) if st.book_ts else None,
@@ -1269,7 +1252,7 @@ async def initialize_market_data_and_workers() -> None:
     # Strategy replay runs off the request path. The dashboard API returns the
     # latest completed cache immediately, even while a 25k-bar replay is warming.
     background_tasks.append(
-        asyncio.create_task(campaign_snapshot_worker(), name="campaign-snapshot-cache")
+        asyncio.create_task(strategy_snapshot_worker(), name="advanced-strategy-snapshot-cache")
     )
 
 
@@ -1284,12 +1267,12 @@ async def startup() -> None:
         name="historical-bootstrap",
     )
     background_tasks.append(bootstrap_task)
-    if CAMPAIGN_ALERTS_ENABLED:
-        alert_task = asyncio.create_task(campaign_alert_worker(), name="campaign-telegram-alerts")
+    if STRATEGY_ALERTS_ENABLED:
+        alert_task = asyncio.create_task(strategy_alert_worker(), name="strategy-telegram-alerts")
         background_tasks.append(alert_task)
-        log.info("Campaign Telegram alerts enabled; monitoring every %.1f seconds", CAMPAIGN_ALERT_POLL_SECONDS)
+        log.info("Advanced strategy Telegram alerts enabled; monitoring every %.1f seconds", STRATEGY_ALERT_POLL_SECONDS)
     else:
-        log.info("Campaign Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        log.info("Strategy Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
     log.info("AST Liquidity Radar API ready; historical bootstrap running in background")
 
 
@@ -1316,8 +1299,8 @@ async def health() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "market_stream_connected": any(s.mark_ts and now_ms() - s.mark_ts < 15_000 for s in states.values()),
         "telegram_enabled": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
-        "campaign_alerts_enabled": CAMPAIGN_ALERTS_ENABLED,
-        "campaign_alert_poll_seconds": CAMPAIGN_ALERT_POLL_SECONDS if CAMPAIGN_ALERTS_ENABLED else None,
+        "strategy_alerts_enabled": STRATEGY_ALERTS_ENABLED,
+        "strategy_alert_poll_seconds": STRATEGY_ALERT_POLL_SECONDS if STRATEGY_ALERTS_ENABLED else None,
         "vantage_mt5_bridge_secret_configured": bool(BRIDGE_SECRET and BRIDGE_SECRET != "replace-this-secret"),
         "data_sources": {
             key: {
@@ -1375,70 +1358,75 @@ async def vantage_mt5_candles(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid MT5 candle payload") from exc
 
 
-_campaign_scanner_cache: dict[str, Any] | None = None
-_campaign_scanner_cache_at = 0.0
-_campaign_scanner_cache_lock: asyncio.Lock | None = None
+_strategy_scanner_cache: dict[str, Any] | None = None
+_strategy_scanner_cache_lock: asyncio.Lock | None = None
 
 
-async def refresh_campaign_scanner_cache() -> dict[str, Any]:
-    """Build point-in-time strategy snapshots in a background worker."""
-    global _campaign_scanner_cache, _campaign_scanner_cache_at, _campaign_scanner_cache_lock
-    if _campaign_scanner_cache_lock is None:
-        _campaign_scanner_cache_lock = asyncio.Lock()
+async def refresh_strategy_scanner_cache() -> dict[str, Any]:
+    """Refresh live signals and cached full-history results outside the request path."""
+    global _strategy_scanner_cache, _strategy_scanner_cache_lock
+    if _strategy_scanner_cache_lock is None:
+        _strategy_scanner_cache_lock = asyncio.Lock()
 
-    async with _campaign_scanner_cache_lock:
-        loop = asyncio.get_running_loop()
+    async with _strategy_scanner_cache_lock:
         assets: list[dict[str, Any]] = []
-        results: list[dict[str, Any]] = []
         for state in states.values():
             result = await asyncio.to_thread(
-                state.campaign_engine.snapshot,
+                state.advanced_strategy_engine.snapshot,
                 state.candles,
-                state.key,
+                state.mark_price,
             )
-            results.append(result)
-            # Yield between assets so HTTP health checks and websocket tasks
-            # are serviced between the two CPU-heavy strategy replays.
-            await asyncio.sleep(0)
-        for state, result in zip(states.values(), results):
             result["data_source"] = state.data_source or "Source not reported"
             result["broker_candle_feed"] = bool(state.broker_candle_feed)
             result["broker_candle_time"] = state.broker_candle_ts
-            result["live_reference_price"] = state.mark_price
             assets.append(result)
+            await asyncio.sleep(0)
 
-        _campaign_scanner_cache = {
+        _strategy_scanner_cache = {
             "time": now_ms(),
-            "strategy_name": "AST Multi-Timeframe Pyramiding Campaign",
+            "strategy_name": "Advanced Multi-Strategy Trading System",
             "assets": assets,
+            "status": "READY" if assets else "WARMING UP",
         }
-        _campaign_scanner_cache_at = loop.time()
-        return _campaign_scanner_cache
+        return _strategy_scanner_cache
 
 
-async def campaign_snapshot_worker() -> None:
-    """Keep the heavy replay warm away from browser/API request threads."""
+async def strategy_snapshot_worker() -> None:
+    """Keep each timeframe's live evaluation and historical backtest cache warm."""
     while True:
         try:
-            await refresh_campaign_scanner_cache()
+            await refresh_strategy_scanner_cache()
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Campaign snapshot cache refresh failed")
+            log.exception("Advanced strategy cache refresh failed")
         await asyncio.sleep(1.0)
 
 
-@app.get("/api/campaign")
-async def campaign_scanner() -> dict[str, Any]:
-    """Return the latest cached campaign state without waiting for a 25k-bar replay."""
-    if _campaign_scanner_cache is not None:
-        return _campaign_scanner_cache
+@app.get("/api/strategy")
+async def strategy_scanner() -> dict[str, Any]:
+    """Return the latest six-engine live and historical strategy snapshot."""
+    if _strategy_scanner_cache is not None:
+        return _strategy_scanner_cache
     return {
         "time": now_ms(),
-        "strategy_name": "AST Multi-Timeframe Pyramiding Campaign",
+        "strategy_name": "Advanced Multi-Strategy Trading System",
         "assets": [],
         "status": "WARMING UP",
     }
+
+
+@app.get("/api/backtest/{asset}/{timeframe}")
+async def historical_backtest(asset: str, timeframe: str) -> dict[str, Any]:
+    """Return the complete deterministic historical trade log for one market/timeframe."""
+    key = asset.upper()
+    if key not in states:
+        raise HTTPException(status_code=404, detail="Unknown market")
+    if timeframe not in TIMEFRAMES:
+        raise HTTPException(status_code=404, detail="Unsupported timeframe")
+    result = states[key].advanced_strategy_engine.historical_trades(timeframe)
+    return {"asset": key, **result}
+
 
 
 @app.websocket("/ws/prices")
@@ -1477,7 +1465,7 @@ async def live_price_stream(websocket: WebSocket) -> None:
 
 
 
-def _campaign_alert_price(asset: str, value: Any) -> str:
+def _strategy_alert_price(asset: str, value: Any) -> str:
     if value is None:
         return "—"
     try:
@@ -1487,126 +1475,51 @@ def _campaign_alert_price(asset: str, value: Any) -> str:
         return "—"
 
 
-def _campaign_alert_quantity(value: Any) -> str:
-    if value is None:
-        return "NOT CONFIGURED"
-    try:
-        return f"{float(value):,.5f}"
-    except (TypeError, ValueError):
-        return "NOT CONFIGURED"
-
-
-def _campaign_setup_alert_id(asset: str, execution: dict[str, Any]) -> str:
-    signal_time = execution.get("signal_time") or execution.get("signal_close") or execution.get("entry_price")
-    return f"setup:{signal_time}:{execution.get('kind')}:{execution.get('side')}"
-
-
-def _seed_campaign_alert_state(asset: str, result: dict[str, Any]) -> None:
-    """Avoid sending stale alerts for positions already present when the worker starts."""
-    seen = campaign_alert_seen[asset]
-    execution = result.get("execution_1m") or {}
-    if execution.get("status") == "ENTRY READY · NEXT 1M OPEN":
-        seen.add(_campaign_setup_alert_id(asset, execution))
-    campaign = result.get("campaign") or {}
-    for position in campaign.get("positions", []):
-        position_id = str(position.get("id") or "")
-        if position_id:
-            seen.add(f"fill:{position_id}")
-            if position.get("partial_taken"):
-                seen.add(f"partial:{position_id}")
-    for position in result.get("recent_closed", []):
-        position_id = str(position.get("id") or "")
-        if position_id:
-            seen.add(f"closed:{position_id}")
-
-
-async def campaign_alert_worker() -> None:
-    """Monitor strategy state on the server and send Telegram alerts independent of the dashboard tab."""
+async def strategy_alert_worker() -> None:
+    """Send one deduplicated Telegram alert for each newly confirmed 1m six-engine setup."""
     bootstrapped_assets: set[str] = set()
     while True:
         try:
-            payload = await campaign_scanner()
+            payload = await strategy_scanner()
             for result in payload.get("assets", []):
                 asset = str(result.get("asset") or "MARKET").upper()
-                replay = result.get("replay") or {}
+                frames = result.get("timeframe_results") or {}
+                execution = frames.get("1m") or {}
                 if asset not in bootstrapped_assets:
-                    if int(replay.get("bars_available") or 0) > 0:
-                        _seed_campaign_alert_state(asset, result)
+                    if frames:
+                        signal_time = execution.get("candle_time")
+                        side = execution.get("side")
+                        if signal_time and side:
+                            strategy_alert_seen[asset].add(f"{asset}:1m:{signal_time}:{side}")
                         bootstrapped_assets.add(asset)
                     continue
 
-                seen = campaign_alert_seen[asset]
-                execution = result.get("execution_1m") or {}
-                if execution.get("status") == "ENTRY READY · NEXT 1M OPEN":
-                    alert_id = _campaign_setup_alert_id(asset, execution)
-                    if alert_id not in seen:
-                        side = execution.get("side") or "TRADE"
-                        message = (
-                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\n"
-                            f"{side} {execution.get('kind') or 'ENTRY'} SETUP CONFIRMED · 1M\n"
-                            f"Planned Entry: {_campaign_alert_price(asset, execution.get('entry_price'))}\n"
-                            f"Stop Loss: {_campaign_alert_price(asset, execution.get('stop_loss'))}\n"
-                            f"Partial TP (1R): {_campaign_alert_price(asset, execution.get('partial_take_profit'))}\n"
-                            f"Final TP: {_campaign_alert_price(asset, execution.get('take_profit'))}\n"
-                            f"Score: {execution.get('score', '—')} | Target: {execution.get('target_r', '—')}R\n"
-                            "Status: Waiting for next 1m open validation.\n"
-                            "SIMULATED PLAN ONLY — no broker order is placed."
-                        )
-                        if await send_telegram(message):
-                            seen.add(alert_id)
+                side = execution.get("side")
+                plan = execution.get("trade_plan") or {}
+                signal_time = execution.get("candle_time")
+                if execution.get("status") != "SIGNAL READY" or not side or not plan or not signal_time:
+                    continue
+                alert_id = f"{asset}:1m:{signal_time}:{side}"
+                if alert_id in strategy_alert_seen[asset]:
+                    continue
+                message = (
+                    f"AST ADVANCED SIX-ENGINE SYSTEM | {asset}\n"
+                    f"{side} SETUP CONFIRMED · 1M\n"
+                    f"Entry: {_strategy_alert_price(asset, plan.get('entry_price'))}\n"
+                    f"Stop Loss: {_strategy_alert_price(asset, plan.get('stop_loss'))}\n"
+                    f"Take Profit (2R): {_strategy_alert_price(asset, plan.get('take_profit'))}\n"
+                    "Confirmed by at least four aligned engines, including Price Action and a trigger engine.\n"
+                    "SIMULATED PLAN ONLY — no broker order is placed."
+                )
+                if await send_telegram(message):
+                    strategy_alert_seen[asset].add(alert_id)
 
-                campaign = result.get("campaign") or {}
-                for position in campaign.get("positions", []):
-                    position_id = str(position.get("id") or "")
-                    if not position_id:
-                        continue
-                    fill_id = f"fill:{position_id}"
-                    if fill_id not in seen:
-                        message = (
-                            f"AST FOUR-ENGINE CAMPAIGN | {asset}\n"
-                            f"{position.get('side', 'TRADE')} {position.get('kind', 'ENTRY')} · SIMULATED FILL CONFIRMED\n"
-                            f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\n"
-                            f"SL: {_campaign_alert_price(asset, position.get('stop_loss'))}\n"
-                            f"Partial TP: {_campaign_alert_price(asset, position.get('partial_take_profit'))}\n"
-                            f"Final TP: {_campaign_alert_price(asset, position.get('take_profit'))}\n"
-                            f"Quantity: {_campaign_alert_quantity(position.get('quantity'))}\n"
-                            "SIMULATED FILL ONLY — this dashboard does not place a broker order."
-                        )
-                        if await send_telegram(message):
-                            seen.add(fill_id)
-
-                    partial_id = f"partial:{position_id}"
-                    if position.get("partial_taken") and partial_id not in seen:
-                        message = (
-                            f"AST CAMPAIGN UPDATE | {asset}\n"
-                            f"{position.get('side', 'TRADE')} PARTIAL TARGET HIT\n"
-                            "50% partial booking simulated at 1R; remaining stop moved to breakeven."
-                        )
-                        if await send_telegram(message):
-                            seen.add(partial_id)
-
-                for position in result.get("recent_closed", []):
-                    position_id = str(position.get("id") or "")
-                    close_id = f"closed:{position_id}"
-                    if not position_id or close_id in seen:
-                        continue
-                    message = (
-                        f"AST CAMPAIGN EXIT | {asset}\n"
-                        f"{position.get('side', 'TRADE')} · {position.get('status', 'CLOSED')}\n"
-                        f"Entry: {_campaign_alert_price(asset, position.get('entry_price'))}\n"
-                        f"Exit: {_campaign_alert_price(asset, position.get('exit_price'))}\n"
-                        f"Result: {position.get('result_r', '—')}R\n"
-                        "This is a simulated strategy result, not a broker execution."
-                    )
-                    if await send_telegram(message):
-                        seen.add(close_id)
-
-            await asyncio.sleep(CAMPAIGN_ALERT_POLL_SECONDS)
+            await asyncio.sleep(STRATEGY_ALERT_POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Campaign Telegram alert worker failed")
-            await asyncio.sleep(max(5.0, CAMPAIGN_ALERT_POLL_SECONDS))
+            log.exception("Advanced strategy Telegram alert worker failed")
+            await asyncio.sleep(max(5.0, STRATEGY_ALERT_POLL_SECONDS))
 
 
 @app.get("/api/events")
@@ -1623,15 +1536,23 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST Four-Engine Campaign Architecture: MBIE market intelligence -> Multi-Timeframe context -> 1m Main/Add-on Entry Engine -> Campaign risk and position management.",
-        "engine_architecture": {
-            "MBIE": "Market regime, structure, liquidity, auction profile proxy, order-flow availability, zones, momentum, volatility, scenarios and data coverage. No entry signal generation.",
-            "Multi-Timeframe Engine": "Combines completed Monthly/Weekly/Daily/4H/1H/30M/15M/5M context without overwriting individual timeframe readings.",
-            "Entry Engine": "Generates 1m MAIN and ADD-ON candidates only; cannot set quantity, stop loss or take profit.",
-            "Campaign Engine": "Owns quantity estimation, SL, TP, total campaign risk, add-on protection, partial exits and campaign invalidation.",
+        "strategy": "Advanced Multi-Strategy: Trend + Liquidity + Breakout + Range + Momentum + Price Action; one shared point-in-time evaluator for live and backtest.",
+        "strategy_engines": {
+            "Trend": "Confirmed HH/HL or LH/LL structure aligned with EMA20/EMA50.",
+            "Liquidity": "Historical swing/equal-high-low pools and sweep rejection followed by structure reclaim.",
+            "Breakout": "Displacement close beyond a prior range or a confirmed breakout retest, with volume support when available.",
+            "Range": "Compressed-range edge rejection only; mid-range entries are blocked.",
+            "Momentum": "RSI, EMA slope, candle strength, divergence and exhaustion.",
+            "Price Action": "BOS/CHOCH plus engulfing/rejection, FVG or order-block reaction.",
         },
-        "trend_lock_mode": "independent per asset; lock flips only on a newer displacement-backed MAJOR CHOCH",
-        "pivot_confirmation": "major 5-left/5-right and minor 2-left/2-right; pivots are usable only after right bars close",
+        "minimum_confirmations": 4,
+        "minimum_risk_reward": 2.0,
+        "backtest_timeframes": list(TIMEFRAME_ORDER),
+        "backtest_entry": "Next completed candle open after the signal candle closes.",
+        "backtest_history_limit": HISTORY_BARS,
+        "historical_trade_endpoint": "/api/backtest/{asset}/{timeframe}",
+
+
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
         "telegram_configured": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "notes": [
@@ -1642,11 +1563,7 @@ async def config() -> dict[str, Any]:
             "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
             "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
-            "Campaign engine replays completed 1m candles sequentially; higher-timeframe candles are exposed only after their own close timestamp.",
-            "1W and 1M context are aggregated from completed daily candles; no incomplete calendar period is used for confirmation.",
-            "1m plans are emitted after a completed signal candle and simulated at the next 1m open; the backend does not place broker orders.",
-            "Campaign defaults: 0.20% risk allocation per position, 1.50% maximum campaign risk, 10 concurrent positions and 2.00% daily loss pause; configure with AST_CAMPAIGN_* environment variables.",
-            "Quantity is only estimated when AST_CAMPAIGN_ACCOUNT_EQUITY and the asset-specific AST_CAMPAIGN_BTC_VALUE_PER_PRICE_UNIT or AST_CAMPAIGN_GOLD_VALUE_PER_PRICE_UNIT are configured; otherwise quantity is explicitly unavailable.",
-            "Add-on entries require same-side campaign, favorable extension and all existing open stops protected at breakeven or better.",
+            "Each timeframe is backtested independently using completed candles only. Live and historical decisions call the same six-engine evaluator.",
+            "Historical entries are simulated at the next candle open; stop/target collisions in one candle assume stop first when lower-timeframe evidence is unavailable.",
         ],
     }

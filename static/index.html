@@ -537,7 +537,42 @@ body{
   .auto-refresh-toggle{padding:7px 9px;font-size:10px}
   #notificationStatus{flex-basis:100%;justify-content:flex-end;font-size:10px}
 }
-.campaign-live-prices{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.campaign-live-price{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12px}.campaign-live-price b{font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.campaign-live-price span{color:var(--muted);font-size:10px;letter-spacing:.06em}.campaign-live-price .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 7px var(--green)}@media(max-width:680px){.campaign-live-prices{justify-content:flex-start;margin-top:8px}.campaign-live-price{padding:6px 8px}}</style>
+.campaign-live-prices{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.campaign-live-price{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12px}.campaign-live-price b{font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.campaign-live-price span{color:var(--muted);font-size:10px;letter-spacing:.06em}.campaign-live-price .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 7px var(--green)}@media(max-width:680px){.campaign-live-prices{justify-content:flex-start;margin-top:8px}.campaign-live-price{padding:6px 8px}}
+/* Advanced six-engine strategy board */
+.six-assets{display:grid;gap:14px;margin-top:14px}
+.six-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
+.six-asset-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.six-asset-name{font-size:15px;font-weight:900;letter-spacing:.07em}
+.six-asset-meta{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.5}
+.six-plan{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
+.six-plan-cell{background:#0c1825;border:1px solid #26384b;border-radius:9px;padding:9px;min-width:0}
+.six-plan-cell .k{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.six-plan-cell .v{font-size:15px;font-weight:850;font-variant-numeric:tabular-nums;margin-top:4px;overflow-wrap:anywhere}
+.six-plan-cell.entry .v{color:var(--cyan)}.six-plan-cell.stop .v{color:var(--red)}.six-plan-cell.target .v{color:var(--green)}
+.six-tf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+.six-tf-card{background:#0c1825;border:1px solid #26384b;border-radius:10px;padding:10px;min-width:0}
+.six-tf-head{display:flex;justify-content:space-between;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:8px}
+.six-tf-head b{font-size:12px;letter-spacing:.06em}
+.six-engine-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.six-engine{border:1px solid #203247;border-radius:8px;padding:7px;min-width:0;background:#0a131e}
+.six-engine-title{font-size:9px;font-weight:850;color:#b9c9d8;letter-spacing:.04em;text-transform:uppercase}
+.six-engine-dir{font-size:10px;font-weight:900;margin-top:4px}
+.six-engine-dir.buy{color:var(--green)}.six-engine-dir.sell{color:var(--red)}.six-engine-dir.neutral{color:var(--amber)}
+.six-engine-reason{font-size:9px;color:var(--muted);line-height:1.45;margin-top:4px;overflow-wrap:anywhere}
+.six-tf-plan{font-size:10px;color:var(--muted);line-height:1.5;margin-top:8px}
+.six-section-title{font-size:11px;font-weight:900;letter-spacing:.07em;color:#c5d5e4;margin:17px 0 8px}
+.six-table-wrap{overflow-x:auto;border:1px solid #26384b;border-radius:10px}
+.six-stats{width:100%;border-collapse:collapse;min-width:850px;font-size:10px}
+.six-stats th,.six-stats td{padding:8px 9px;border-bottom:1px solid #203247;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.six-stats th:first-child,.six-stats td:first-child{text-align:left}
+.six-stats th{background:#101d2b;color:#b8c9d8;font-size:9px;text-transform:uppercase;letter-spacing:.04em}
+.six-stats tr:last-child td{border-bottom:0}
+.six-stats a{color:var(--cyan);text-decoration:none}
+.six-note{font-size:10px;color:var(--muted);line-height:1.55;margin-top:9px}
+.six-waiting{background:#0c1825;border:1px dashed #31465d;border-radius:9px;padding:11px;color:var(--muted);font-size:11px;line-height:1.5}
+@media(max-width:700px){.six-plan{grid-template-columns:repeat(2,minmax(0,1fr))}.six-tf-grid{grid-template-columns:1fr}.six-asset{padding:10px}}
+
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -554,14 +589,14 @@ body{
     </div>
   </div>
 
-  <section class="card full" id="campaignSection">
+  <section class="card full" id="strategySection">
     <div class="head">
-      <div><div class="asset">1M CAMPAIGN EXECUTION</div><div class="sub">MBIE understands market → MTF combines all timeframes → Entry creates 1m Main/Add-on → Campaign controls Quantity / SL / TP / Total Risk</div></div>
+      <div><div class="asset">ADVANCED MULTI-STRATEGY SYSTEM</div><div class="sub">TREND · LIQUIDITY · BREAKOUT · RANGE · MOMENTUM · PRICE ACTION · MINIMUM 1:2 RR</div></div>
       <div id="campaignLivePrices" class="campaign-live-prices"><div class="campaign-live-price"><span>BTC</span><b>—</b></div><div class="campaign-live-price"><span>GOLD</span><b>—</b></div></div>
     </div>
-    <div id="campaignSignals" class="campaign-assets"><div class="empty">Loading multi-timeframe campaign analysis…</div></div>
+    <div id="campaignSignals" class="six-assets"><div class="empty">Loading six-engine live analysis and historical backtests…</div></div>
   </section>
-  <div class="footer">BTC analysis uses Binance USD-M Futures candles. GOLD strategy history and live reference use Binance XAUUSDT TradFi Perpetual candles only. Vantage MT5 is an optional separate broker feed and is not used as a Gold historical fallback. The campaign engine replays completed 1m candles sequentially and exposes simulated entries at the next 1m open after confirmation. Dashboard plans do not place broker orders. Replay fees and slippage are excluded; lot sizing requires account equity and broker contract/tick-value settings.</div>
+  <div class="footer">BTC uses Binance USD-M historical/live candles. GOLD uses Binance XAUUSDT TradFi Perpetual historical/live candles; Vantage MT5 remains an optional separate broker feed. All six-engine signals use completed candles only. Historical entries are simulated at the next candle open; when one candle reaches both SL and TP, SL is assumed first unless lower-timeframe evidence exists. Fees, spread and slippage are not included where historical cost data is unavailable. All trades are simulated; no broker orders are sent.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -686,137 +721,13 @@ function renderMarketIntelligence(info,digits){
     +'</div>';
 }
 
-function renderLiquidityLevels(asset,digits){
-  const frames={...(asset.higher_timeframes||{}),"1m":asset.market_intelligence||{}};
-  const order=["1M","1w","1d","4h","1h","30m","15m","5m","1m"];
-  const timeframeLabels={"1M":"1MO","1w":"1W","1d":"1D","4h":"4H","1h":"1H","30m":"30M","15m":"15M","5m":"5M","1m":"1MIN"};
-  const ranking={BUY_SIDE:[],SELL_SIDE:[]};
-  const addRankedLevel=(level,side,tf,layer)=>{
-    if(!level || !Number.isFinite(Number(level.price))) return;
-    const source=String(level.label||'').toUpperCase();
-    // Strength is a direct presentation of the existing liquidity source type:
-    // equal-pivot pools are strong; structural swing/range pools are moderate;
-    // single micro-pivot/range pools are weak. No extra indicator or score is added.
-    const strength=(source.includes('EQUAL HIGH')||source.includes('EQUAL LOW'))
-      ? 'STRONG'
-      : (source.includes('MICRO SWING')||source.includes('RECENT MICRO RANGE'))
-        ? 'WEAK'
-        : (source.includes('SWING HIGH')||source.includes('SWING LOW')||source.includes('PREVIOUS RANGE'))
-          ? 'MODERATE' : 'WEAK';
-    ranking[side].push({
-      price:Number(level.price),
-      side,
-      timeframe:timeframeLabels[tf]||tf.toUpperCase(),
-      layer,
-      label:level.label||'LIQUIDITY LEVEL',
-      strength
-    });
-  };
-  for(const tf of order){
-    const frame=frames[tf]||{};
-    const swing=frame.persistent_liquidity||{};
-    const scalp=frame.scalping_liquidity||{};
-    addRankedLevel(swing.buy_side,'BUY_SIDE',tf,'SWING');
-    addRankedLevel(swing.sell_side,'SELL_SIDE',tf,'SWING');
-    addRankedLevel(scalp.buy_side,'BUY_SIDE',tf,'SCALP');
-    addRankedLevel(scalp.sell_side,'SELL_SIDE',tf,'SCALP');
-  }
-  const rankingPrice=Number(asset.live_reference_price)||Number(frames["1m"]?.close)||0;
-  const rankOrdinal=value=>value===1?'1st':value===2?'2nd':value===3?'3rd':value+'th';
-  const rankList=(side)=>{
-    const rows=[...ranking[side]].sort((a,b)=>Math.abs(a.price-rankingPrice)-Math.abs(b.price-rankingPrice));
-    if(!rows.length) return '<div class="liq-ranking-empty">No active '+(side==='BUY_SIDE'?'buy-side':'sell-side')+' liquidity</div>';
-    return rows.map((level,index)=>
-      '<article class="liq-ranking-row" data-liq-rank-row data-price="'+level.price+'">'
-      +'<span class="liq-ranking-index">'+rankOrdinal(index+1)+'</span>'
-      +'<div class="liq-ranking-main"><b>'+level.timeframe+' · '+level.layer+'</b><small>'+level.label+'</small></div>'
-      +'<strong class="liq-ranking-price">'+n(level.price,digits)+'</strong>'
-      +'<span class="liq-strength '+level.strength.toLowerCase()+'">'+level.strength+'</span>'
-      +'<small class="liq-ranking-distance">'+n(Math.abs(level.price-rankingPrice),digits)+' away</small>'
-      +'</article>'
-    ).join('');
-  };
-  const rankingHtml='<section class="liq-ranking" data-liquidity-ranking data-asset="'+asset.asset+'">'
-    +'<div class="liq-ranking-card"><div class="liq-ranking-title buy-title">BUY-SIDE · NEAREST → FARTHEST</div><div class="liq-ranking-list" data-ranking-side="BUY_SIDE">'+rankList('BUY_SIDE')+'</div></div>'
-    +'<div class="liq-ranking-card"><div class="liq-ranking-title sell-title">SELL-SIDE · NEAREST → FARTHEST</div><div class="liq-ranking-list" data-ranking-side="SELL_SIDE">'+rankList('SELL_SIDE')+'</div></div>'
-    +'</section>';
-  const frameRows=order.map(tf=>{
-    const frame=frames[tf]||{};
-    const pools=frame.persistent_liquidity||{};
-    const scalp=frame.scalping_liquidity||{};
-    const buy=pools.buy_side||null;
-    const sell=pools.sell_side||null;
-    const ref=Number(frame.close);
-    const sideHtml=(level,side,layer)=>{
-      const isScalp=layer==='scalp';
-      const sideLabel=side==='buy'?'BUY-SIDE ↑':'SELL-SIDE ↓';
-      if(!level){
-        const waitText=isScalp?'No separate micro pool in 60–999 pip band (swing levels excluded)':'Waiting for untouched swing liquidity';
-        return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>—</strong><small>'+waitText+'</small></div>';
-      }
-      const distance=Number.isFinite(Number(level.distance_points))?Number(level.distance_points):Math.abs(Number(level.price)-ref);
-      const distPct=level.distance_pct!==null&&level.distance_pct!==undefined?Number(level.distance_pct):ref>0?distance/ref*100:0;
-      const detail=isScalp
-        ? n(level.distance_pips,1)+' pips away · '+(level.label||'MICRO POOL')
-        : n(distance,digits)+' away · '+n(distPct,3)+'% · '+(level.label||'ACTIVE SWING POOL');
-      return '<div class="liquidity-side '+side+(isScalp?' scalp':'')+'"><span class="name">'+sideLabel+'</span><strong>'+n(level.price,digits)+'</strong><small>'+detail+'</small></div>';
-    };
-    const cleared=pools.last_cleared||{};
-    const scalpCleared=scalp.last_cleared||{};
-    const clearText=[
-      cleared.buy_side?'Buy '+cleared.buy_side.event+' @ '+n(cleared.buy_side.price,digits):null,
-      cleared.sell_side?'Sell '+cleared.sell_side.event+' @ '+n(cleared.sell_side.price,digits):null
-    ].filter(Boolean).join(' · ');
-    const scalpClearText=[
-      scalpCleared.buy_side?'Buy '+scalpCleared.buy_side.event+' @ '+n(scalpCleared.buy_side.price,digits):null,
-      scalpCleared.sell_side?'Sell '+scalpCleared.sell_side.event+' @ '+n(scalpCleared.sell_side.price,digits):null
-    ].filter(Boolean).join(' · ');
-    const timeframeLabel={"1M":"1MO","1w":"1W","1d":"1D","4h":"4H","1h":"1H","30m":"30M","15m":"15M","5m":"5M","1m":"1MIN"}[tf]||tf.toUpperCase();
-    return '<article class="liquidity-tf">'
-      +'<div class="liquidity-tf-head"><b>'+timeframeLabel+'</b><span>SWING '+(pools.status|| (frame.ready?'SCANNING':'WARMING UP'))+' · SCALP '+(scalp.status||'SCANNING')+'</span></div>'
-      +'<div class="liquidity-layer-label">SWING LIQUIDITY · STRUCTURE POOLS</div>'
-      +sideHtml(buy,'buy','swing')+sideHtml(sell,'sell','swing')
-      +'<div class="liquidity-cleared">'+(clearText?'Swing cleared · '+clearText:'Swing cleared · None recorded')+'</div>'
-      +'<div class="liquidity-layer-label scalp">SCALPING LIQUIDITY · 60–999 PIPS</div>'
-      +sideHtml(scalp.buy_side||null,'buy','scalp')+sideHtml(scalp.sell_side||null,'sell','scalp')
-      +'<div class="liquidity-cleared scalp-clear">'+(scalpClearText?'Scalp cleared · '+scalpClearText:'Scalp cleared · None recorded')+'</div>'
-      +'</article>';
-  }).join('');
-  return '<section class="liquidity-panel">'
-    +'<div class="liquidity-panel-head"><div class="liquidity-panel-title">ACTIVE LIQUIDITY · ALL TIMEFRAMES</div>'+tag('SWING + SCALPING · SEPARATE LOCKS','neutral')+'</div>'
-    +'<div class="liquidity-panel-note">Swing pools remain unchanged. Scalp pools seed from confirmed micro highs/lows 60–999 pips away (BTC: $1/pip; GOLD: $0.01/pip). Levels 1,000+ pips are left to the swing-liquidity layer. Scalp pools stay locked until swept, broken, or they move beyond 999 pips. Replacements activate only on the next completed candle.</div>'
-    +rankingHtml
-    +'<div class="liquidity-grid">'+frameRows+'</div>'
-    +'</section>';
-}
-
-function updateLiquidityRankingPrices(asset,currentPrice){
-  const rankOrdinal=value=>value===1?'1st':value===2?'2nd':value===3?'3rd':value+'th';
-  const price=Number(currentPrice);
-  if(!Number.isFinite(price)||price<=0) return;
-  document.querySelectorAll('.liq-ranking[data-asset="'+asset+'"]').forEach(panel=>{
-    panel.querySelectorAll('[data-ranking-side]').forEach(list=>{
-      const rows=Array.from(list.querySelectorAll('[data-liq-rank-row]'));
-      rows.sort((a,b)=>Math.abs(Number(a.dataset.price)-price)-Math.abs(Number(b.dataset.price)-price));
-      rows.forEach((row,index)=>{
-        const rank=row.querySelector('.liq-ranking-index');
-        const distance=row.querySelector('.liq-ranking-distance');
-        if(rank) rank.textContent=rankOrdinal(index+1);
-        if(distance) distance.textContent=n(Math.abs(Number(row.dataset.price)-price),asset==='BTC'?1:3)+' away';
-        list.appendChild(row);
-      });
-    });
-  });
-}
-
-function renderCampaigns(payload){
+function renderAdvancedStrategy(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
-  if(!assets.length){
-    root.innerHTML='<div class="empty">Campaign engine is warming up. Live prices remain connected.</div>';
-    return;
-  }
   const digitsFor=asset=>asset==='BTC'?1:3;
+  const fmt=(value,digits=2)=>value===null||value===undefined||value===''?'—':
+    typeof value==='number'&&Number.isFinite(value)?n(value,digits):String(value);
+  const esc=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
   const tape=$('campaignLivePrices');
   if(tape){
     const byAsset=Object.fromEntries(assets.map(a=>[a.asset,a]));
@@ -828,76 +739,99 @@ function renderCampaigns(payload){
       return '<div class="campaign-live-price"><i class="live-dot"></i><span>'+symbol+' · '+source+'</span><b data-live-price="'+symbol+'">'+(fresh?n(live,digitsFor(symbol)):'Waiting…')+'</b></div>';
     }).join('');
   }
-  const renderLevel=(label,value,digits,kind='')=>
-    '<div class="campaign-level '+kind+'"><div class="k">'+label+'</div><div class="v">'+(value===null||value===undefined?'—':typeof value==='number'?n(value,digits):value)+'</div></div>';
+  if(!assets.length){
+    root.innerHTML='<div class="empty">Six-engine strategy is warming up candle history. No signal or win rate is assumed.</div>';
+    return;
+  }
+
+  const timeframes=['1m','5m','15m','30m','1h','4h','1d'];
+  const engineLabels={
+    trend:'TREND ENGINE',
+    liquidity:'LIQUIDITY ENGINE',
+    breakout:'BREAKOUT ENGINE',
+    range:'RANGE ENGINE',
+    momentum:'MOMENTUM ENGINE',
+    price_action:'PRICE ACTION ENGINE'
+  };
+  const engineHtml=(name,info)=>{
+    const side=info?.side;
+    const kind=side==='BUY'?'buy':side==='SELL'?'sell':'neutral';
+    const direction=side||info?.direction||'WAITING';
+    return '<div class="six-engine">'
+      +'<div class="six-engine-title">'+engineLabels[name]+'</div>'
+      +'<div class="six-engine-dir '+kind+'">'+esc(direction)+'</div>'
+      +'<div class="six-engine-reason">'+esc(info?.reason||'Waiting for sufficient completed-candle data')+'</div>'
+      +'</div>';
+  };
+  const statCell=(value,digits=2)=>value===null||value===undefined?'—':
+    value==='INF'?'INF':typeof value==='number'?n(value,digits):esc(value);
 
   root.innerHTML=assets.map(a=>{
-    const digits=digitsFor(a.asset);
-    const alignment=a.alignment||{};
-    const campaign=a.campaign||{};
-    const execution=a.execution_1m||null;
-    const positions=(campaign.positions||[]).filter(p=>p.status==='OPEN');
-    const side=execution?.side||campaign.side||alignment.candidate_side||null;
-    const statusText=execution?.status||a.status||'WAITING';
-    const statusKind=statusText.includes('READY')||statusText.includes('ACTIVE')?'good':
-      statusText.includes('WAITING')?'warn':'neutral';
+    const asset=a.asset;
+    const digits=digitsFor(asset);
+    const frames=a.timeframe_results||{};
+    const stats=a.historical_performance||{};
+    const one=frames['1m']||{};
+    const plan=one.trade_plan||null;
+    const status=one.status||a.status||'WARMING UP';
+    const statusKind=status==='SIGNAL READY'?'good':status==='WARMING UP'?'neutral':'warn';
     const price=a.live_reference_price;
-    let cards='';
-
-    if(execution && execution.status==='ENTRY READY · NEXT 1M OPEN'){
-      cards+='<article class="campaign-position">'
-        +'<div class="campaign-position-head"><span class="campaign-position-title">'+(execution.kind||'ENTRY')+' · '+(execution.side||'')+'</span>'+tag(execution.grade||'SETUP',execution.score>=80?'good':'warn')+'</div>'
-        +'<div class="campaign-levels">'
-        +renderLevel('Entry',execution.entry_price,digits,'entry')
-        +renderLevel('Stop loss',execution.stop_loss,digits,'stop')
-        +renderLevel('Final TP',execution.take_profit,digits,'target')
-        +renderLevel('Target R',execution.target_r===null||execution.target_r===undefined?'—':n(execution.target_r,2)+'R',digits)
+    const planHtml=plan
+      ? '<div class="six-plan">'
+        +'<div class="six-plan-cell entry"><div class="k">Entry</div><div class="v">'+n(plan.entry_price,digits)+'</div></div>'
+        +'<div class="six-plan-cell stop"><div class="k">Stop Loss</div><div class="v">'+n(plan.stop_loss,digits)+'</div></div>'
+        +'<div class="six-plan-cell target"><div class="k">Take Profit · 2R</div><div class="v">'+n(plan.take_profit,digits)+'</div></div>'
+        +'<div class="six-plan-cell"><div class="k">Risk : Reward</div><div class="v">1 : 2</div></div>'
         +'</div>'
-        +'<div class="campaign-meta">Score '+n(execution.score,1)+'/100 · Risk '+n(execution.risk_pct,2)+'% · '+(execution.execution||'Next 1m open after confirmation')+'</div>'
+      : '<div class="six-waiting">'+esc(one.reason||'WAITING · No valid six-engine setup. Entry is disabled until all confirmation rules pass.')+'</div>';
+
+    const tfHtml=timeframes.map(tf=>{
+      const result=frames[tf]||{};
+      const direction=result.side;
+      const tfKind=direction==='BUY'?'good':direction==='SELL'?'bad':'neutral';
+      const engines=result.engines||{};
+      return '<article class="six-tf-card">'
+        +'<div class="six-tf-head"><b>'+tf.toUpperCase()+'</b>'+tag(result.status||'WARMING UP',tfKind)+'</div>'
+        +'<div class="six-engine-grid">'+Object.keys(engineLabels).map(name=>engineHtml(name,engines[name])).join('')+'</div>'
+        +(result.trade_plan?'<div class="six-tf-plan">Entry '+n(result.trade_plan.entry_price,digits)+' · SL '+n(result.trade_plan.stop_loss,digits)+' · TP '+n(result.trade_plan.take_profit,digits)+' · 1:2 RR</div>':'<div class="six-tf-plan">'+esc(result.reason||'No confirmed setup')+'</div>')
         +'</article>';
-    }
-    if(positions.length){
-      cards+=positions.map((p,index)=>
-        '<article class="campaign-position">'
-        +'<div class="campaign-position-head"><span class="campaign-position-title">OPEN '+p.side+' · #'+(index+1)+'</span>'+tag(p.management||p.status,p.partial_taken?'good':'neutral')+'</div>'
-        +'<div class="campaign-levels">'
-        +renderLevel('Entry',p.entry_price,digits,'entry')
-        +renderLevel('Current SL',p.stop_loss,digits,'stop')
-        +renderLevel('Final TP',p.take_profit,digits,'target')
-        +renderLevel('Quantity',p.quantity===null||p.quantity===undefined?'Not configured':n(p.quantity,5),digits)
-        +'</div>'
-        +'<div class="campaign-meta">Risk '+n(p.risk_pct,2)+'% · '+(p.management||p.status)+'</div>'
-        +'</article>'
-      ).join('');
-    }
-    if(!cards){
-      cards='<div class="campaign-status-line">'+(a.reason||'Waiting for the next valid 1m setup.')+'</div>';
-    }
-    const performance=a.performance||{};
-    const winText=performance.win_rate_pct===null||performance.win_rate_pct===undefined?'—':n(performance.win_rate_pct,1)+'%';
-    const closed=n(performance.closed_positions||0,0);
-    const riskLine='Risk '+n(campaign.risk_pct||0,2)+' / '+n(campaign.max_risk_pct||0,2)+'% · Open '+(campaign.open_positions||0)+' / '+(campaign.max_positions||10);
-    const frameData={...(a.higher_timeframes||{}),"1m":a.market_intelligence||{}};
-    const timeframeOrder=["1M","1w","1d","4h","1h","30m","15m","5m","1m"];
-    const timeframeHtml=timeframeOrder.map(tf=>{
-      const direction=frameData[tf]?.side;
-      const cls=direction==="BUY"?"buy":direction==="SELL"?"sell":"neutral";
-      return '<span class="campaign-tf '+cls+'">'+tf+' <b>'+(direction||'—')+'</b></span>';
     }).join('');
-    const conflicts=(alignment.conflicting_timeframes||[])
-      .map(item=>item.timeframe+' '+(item.side||'—')).join(' · ')||'none';
-    const mtfLine='MTF '+(alignment.status||'WAITING')
-      +' · 1m execution '+((alignment.execution_context||{}).status||'UNAVAILABLE')
-      +' · conflicts '+conflicts;
 
-    return '<section class="campaign-asset">'
-      +'<div class="campaign-asset-head"><div><div class="campaign-asset-name">'+a.asset+' · 1M EXECUTION</div><div class="campaign-price-line"><span>Live price: <b data-live-price="'+a.asset+'">'+n(price,digits)+'</b></span><span>Bias: '+(alignment.side||alignment.candidate_side||'UNCONFIRMED')+'</span></div></div>'+tag(statusText,statusKind)+'</div>'
-      +'<div class="campaign-position-grid">'+cards+'</div>'
-      +'<div class="campaign-tf-row">'+timeframeHtml+'</div>'
-      +'<div class="campaign-foot">'+mtfLine+'</div>'
-      +renderLiquidityLevels(a,digits)
-      +'<div class="campaign-meta">'+riskLine+' · Closed '+closed+' · Win rate '+winText+' · Net '+n(performance.net_r||0,2)+'R</div>'
-      +'<div class="campaign-foot">Analysis refreshes on completed candles. Plans are simulated; no broker orders are sent.</div>'
+    const statsRows=timeframes.map(tf=>{
+      const p=stats[tf]||{};
+      const count=p.total_historical_trades??0;
+      const backtestUrl='/api/backtest/'+encodeURIComponent(asset)+'/'+encodeURIComponent(tf);
+      return '<tr>'
+        +'<td><b>'+tf.toUpperCase()+'</b> · <a href="'+backtestUrl+'" target="_blank" rel="noopener">Trades</a></td>'
+        +'<td>'+statCell(p.bars_tested,0)+'</td>'
+        +'<td>'+statCell(p.total_historical_trades,0)+'</td>'
+        +'<td>'+statCell(p.total_winning_trades,0)+'</td>'
+        +'<td>'+statCell(p.total_losing_trades,0)+'</td>'
+        +'<td>'+(p.win_rate_pct===null||p.win_rate_pct===undefined?'—':n(p.win_rate_pct,2)+'%')+'</td>'
+        +'<td>'+(p.loss_rate_pct===null||p.loss_rate_pct===undefined?'—':n(p.loss_rate_pct,2)+'%')+'</td>'
+        +'<td>'+statCell(p.actual_risk_reward_ratio,2)+'</td>'
+        +'<td>'+statCell(p.total_winning_r,2)+'R</td>'
+        +'<td>'+statCell(p.total_losing_r,2)+'R</td>'
+        +'<td>'+statCell(p.net_profit_loss_r,2)+'R</td>'
+        +'<td>'+statCell(p.maximum_drawdown_r,2)+'R</td>'
+        +'<td>'+statCell(p.maximum_consecutive_wins,0)+'</td>'
+        +'<td>'+statCell(p.maximum_consecutive_losses,0)+'</td>'
+        +'<td>'+statCell(p.profit_factor,2)+'</td>'
+        +'</tr>';
+    }).join('');
+
+    return '<section class="six-asset">'
+      +'<div class="six-asset-head"><div><div class="six-asset-name">'+esc(asset)+' · ADVANCED SIX-ENGINE</div>'
+      +'<div class="six-asset-meta">Live price: <b data-live-price="'+esc(asset)+'">'+fmt(price,digits)+'</b> · Source: '+esc(a.data_source||'Unavailable')+' · Historical bars per timeframe: up to 25,000</div></div>'
+      +tag(status,statusKind)+'</div>'
+      +'<div class="six-section-title">1M LIVE EXECUTION DECISION</div>'
+      +planHtml
+      +'<div class="six-section-title">LIVE ENGINE CONFIRMATIONS · ALL TIMEFRAMES</div>'
+      +'<div class="six-tf-grid">'+tfHtml+'</div>'
+      +'<div class="six-section-title">HISTORICAL PERFORMANCE · COMPLETED CANDLES ONLY</div>'
+      +'<div class="six-table-wrap"><table class="six-stats"><thead><tr><th>Timeframe</th><th>Bars</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Win Rate</th><th>Loss Rate</th><th>Actual RR</th><th>Winning R</th><th>Losing R</th><th>Net R</th><th>Max DD</th><th>Max Win Streak</th><th>Max Loss Streak</th><th>Profit Factor</th></tr></thead><tbody>'+statsRows+'</tbody></table></div>'
+      +'<div class="six-note">Full trade logs are available from each timeframe’s Trades link. Maximum consecutive wins/losses and gross winning/losing R are included in the returned backtest report. '+esc(stats['1m']?.costs?.reason||'Historical transaction costs may be unavailable.')+'</div>'
+      +'<div class="six-asset-meta">1m final decision: '+esc(one.reason||'Waiting for a completed candle')+'</div>'
       +'</section>';
   }).join('');
 }
@@ -920,16 +854,16 @@ async function refresh(){
   if(refreshInFlight) return;
   refreshInFlight=true;
   try{
-    const [health,campaign]=await Promise.all([
+    const [health,strategy]=await Promise.all([
       fetchJson('/api/health'),
-      fetchJson('/api/campaign')
+      fetchJson('/api/strategy')
     ]);
-    renderCampaigns(campaign);
-    const alertsOn=Boolean(health.campaign_alerts_enabled);
-    $('notificationStatus').textContent=alertsOn?'Telegram alerts: ON':'Telegram alerts: OFF · setup required';
+    renderAdvancedStrategy(strategy);
+    const alertsOn=Boolean(health.strategy_alerts_enabled);
+    $('notificationStatus').textContent=alertsOn?'Strategy Telegram alerts: ON':'Strategy Telegram alerts: OFF · setup required';
     $('notificationStatus').style.color=alertsOn?'var(--green)':'var(--amber)';
     $('notificationStatus').title=alertsOn
-      ? 'Server-side campaign alerts are monitoring independently of this dashboard tab.'
+      ? 'Server-side six-engine strategy alerts are monitoring independently of this dashboard tab.'
       : 'Set ENABLE_TELEGRAM=true, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render Environment.';
     $('connDot').className='dot '+(health.market_stream_connected?'on':'off');
     $('connText').textContent=health.market_stream_connected
@@ -937,8 +871,8 @@ async function refresh(){
       : 'API connected · waiting for market feed';
   }catch(e){
     $('connDot').className='dot off';
-    $('connText').textContent='Campaign API reconnecting…';
-    console.error('AST campaign dashboard refresh failed:',e);
+    $('connText').textContent='Strategy API reconnecting…';
+    console.error('AST six-engine dashboard refresh failed:',e);
   }finally{
     refreshInFlight=false;
   }
@@ -976,7 +910,6 @@ function connectLivePrices(){
         const digits=asset==='BTC'?1:3;
         const formatted=n(item.price,digits);
         document.querySelectorAll('[data-live-price="'+asset+'"]').forEach(node=>{node.textContent=formatted;});
-        updateLiquidityRankingPrices(asset,item.price);
       }
     }catch(error){console.warn('Live price packet parse failed',error);}
   };
