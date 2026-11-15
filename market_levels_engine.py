@@ -180,6 +180,12 @@ def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
             if atr_at_pivot <= 0 or price <= 0:
                 continue
             half_width = max(price * 0.00008, min(atr_at_pivot * 0.14, price * 0.0010))
+            same_side_pivots = pivot_highs if side == "RESISTANCE" else pivot_lows
+            liquidity_tolerance = max(atr_at_pivot * 0.20, half_width * 1.5)
+            liquidity_pool = any(
+                other_index != index and abs(float(other_price) - price) <= liquidity_tolerance
+                for other_index, other_price in same_side_pivots[-120:]
+            )
             stats = _reaction_stats(candles, index, price, half_width, atr_at_pivot, side)
             if stats["touches"] < 1 or stats["reactions"] < 1 or stats["broken"]:
                 continue
@@ -196,6 +202,7 @@ def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
                 "reactions": int(stats["reactions"]),
                 "freshness": freshness,
                 "volume_ratio": _volume_ratio(candles, index),
+                "liquidity_pool": liquidity_pool,
                 "last_touch_time": int(candles[int(stats["last_touch_index"])]["t"]),
             })
     return candidates
@@ -236,13 +243,15 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
         volume_ratio = sum(float(item["volume_ratio"]) for item in group) / len(group)
         if touches >= 12 or (touches >= 8 and probability < 0.65):
             continue
-        reaction_score = 34.0 * probability
-        touch_score = 18.0 * min(touches / 4.0, 1.0)
-        confluence_score = 22.0 * min(len(source_tfs) / 3.0, 1.0)
-        freshness_score = 16.0 * freshness
+        liquidity_evidence = any(bool(item.get("liquidity_pool")) for item in group)
+        reaction_score = 31.0 * probability
+        touch_score = 16.0 * min(touches / 4.0, 1.0)
+        confluence_score = 20.0 * min(len(source_tfs) / 3.0, 1.0)
+        freshness_score = 15.0 * freshness
         volume_score = 10.0 * min(max(volume_ratio - 0.8, 0.0) / 1.2, 1.0)
+        liquidity_score = 8.0 if liquidity_evidence else 0.0
         consumption_penalty = min(max(touches - 5, 0) * 4.0, 16.0)
-        score = max(0.0, min(100.0, reaction_score + touch_score + confluence_score + freshness_score + volume_score - consumption_penalty))
+        score = max(0.0, min(100.0, reaction_score + touch_score + confluence_score + freshness_score + volume_score + liquidity_score - consumption_penalty))
         if touches < 2 or reactions < 1 or probability < MIN_REACTION_RATE or score < MIN_LEVEL_SCORE:
             continue
         if len(source_tfs) < 2 and reactions < 3:
