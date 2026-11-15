@@ -1312,7 +1312,7 @@ async def health() -> dict[str, Any]:
                 "vantage_broker_candles_active": state.broker_candle_feed,
             }
             for key, state in states.items()
-
+        },
     }
 
 
