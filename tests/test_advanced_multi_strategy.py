@@ -8,6 +8,7 @@ from advanced_multi_strategy import (
     MIN_BARS,
     TIMEFRAME_MS,
     TIMEFRAME_ORDER,
+    _clean_candles,
     _confirmed_swings,
     _summary,
     _trend_state,
@@ -23,8 +24,8 @@ def candles(count: int, interval: int = 60_000, drift: float = 1.0):
         rows.append({
             "t": index * interval,
             "o": op,
-            "h": close + 0.15,
-            "l": op - 0.15,
+            "h": max(op, close) + 0.15,
+            "l": min(op, close) - 0.15,
             "c": close,
             "v": 100.0,
         })
@@ -139,7 +140,7 @@ class AST915EMATests(unittest.TestCase):
     def test_clean_candles_sort_and_deduplicate_timestamp(self):
         rows = candles(3)
         rows.append({**rows[-1], "c": rows[-1]["c"] + 0.1})
-        clean = self.engine._clean_candles(rows)
+        clean = _clean_candles(rows)
         self.assertEqual(len(clean), 3)
         self.assertAlmostEqual(clean[-1]["c"], rows[-1]["c"] + 0.1)
 
