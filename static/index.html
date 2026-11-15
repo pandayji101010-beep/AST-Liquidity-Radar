@@ -566,6 +566,28 @@ body{
  .levels-cell:last-child{grid-column:1/-1}
  .levels-status{width:100%;min-height:32px}
 }
+/* Compact live BTC/Gold prices and all-timeframe bias line */
+.live-price-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:-4px 0 14px}
+.live-price-card{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 14px;border:1px solid #26384b;border-radius:11px;background:#0b1724;min-width:0}
+.live-price-symbol{font-size:11px;font-weight:900;letter-spacing:.07em;color:#aebfd0}
+.live-price-value{font-size:19px;font-weight:900;font-variant-numeric:tabular-nums;color:#f1f6fa;overflow-wrap:anywhere}
+.bias-block{margin:0 0 12px;padding:9px 10px;border:1px solid #26384b;border-radius:9px;background:#0b1724;min-width:0}
+.bias-heading{font-size:9px;font-weight:900;letter-spacing:.08em;color:#91a4b9;margin-bottom:7px}
+.bias-line{display:flex;align-items:center;gap:9px;overflow-x:auto;white-space:nowrap;scrollbar-width:thin;padding-bottom:2px}
+.bias-item{display:inline-flex;align-items:center;gap:5px;font-size:10px;flex:0 0 auto}
+.bias-item b{font-size:10px;color:#dfe9f2}
+.bias-main{font-size:9px;font-weight:900;letter-spacing:.03em}
+.bias-main.bullish,.bias-part.bullish{color:var(--green)}
+.bias-main.bearish,.bias-part.bearish{color:var(--red)}
+.bias-main.neutral,.bias-part.neutral{color:var(--amber)}
+.bias-parts{font-size:9px;color:#a9bacb}
+.bias-legend{font-size:9px;color:#8297ab;margin-top:6px}
+@media(max-width:700px){
+ .live-price-strip{gap:7px;margin:-2px 0 11px}
+ .live-price-card{padding:9px;align-items:flex-start;flex-direction:column;gap:4px}
+ .live-price-value{font-size:16px}
+ .bias-block{padding:8px}
+}
 </style>
 </head>
 <body>
@@ -576,6 +598,11 @@ body{
       <div><h1>HIGH-CONFIDENCE MARKET LEVELS</h1><div class="sub">BTC + GOLD · SUPPORT & RESISTANCE</div></div>
     </div>
     <div class="status"><span id="connDot" class="dot"></span><span id="connText">Connecting to live market feed…</span></div>
+  </div>
+
+  <div class="live-price-strip" aria-label="Live market prices">
+    <div class="live-price-card"><span class="live-price-symbol">BTC LIVE PRICE</span><strong class="live-price-value" id="livePriceBTC">—</strong></div>
+    <div class="live-price-card"><span class="live-price-symbol">GOLD LIVE PRICE</span><strong class="live-price-value" id="livePriceGOLD">—</strong></div>
   </div>
 
   <section class="card full" id="strategySection">
@@ -596,6 +623,16 @@ const escapeHtml = value => String(value??'').replaceAll('&','&amp;').replaceAll
 function renderAsset(asset){
   const digits=asset.asset==='BTC'?1:3;
   const levels=Array.isArray(asset.levels)?asset.levels:[];
+  const bias=asset.timeframe_bias||{};
+  const timeframeOrder=[['1d','1D'],['4h','4H'],['1h','1H'],['30m','30M'],['15m','15M'],['5m','5M'],['1m','1M']];
+  const biasMark=value=>value==='BULLISH'?'↑':value==='BEARISH'?'↓':'—';
+  const biasKind=value=>value==='BULLISH'?'bullish':value==='BEARISH'?'bearish':'neutral';
+  const biasLine=timeframeOrder.map(([key,label])=>{
+    const item=bias[key]||{};
+    const overall=item.bias||'NEUTRAL';
+    return '<span class="bias-item"><b>'+label+'</b><span class="bias-main '+biasKind(overall)+'">'+(overall==='BULLISH'?'BULL':overall==='BEARISH'?'BEAR':'FLAT')+'</span>'
+      +'<span class="bias-parts">H<span class="bias-part '+biasKind(item.historical)+'">'+biasMark(item.historical)+'</span> P<span class="bias-part '+biasKind(item.present)+'">'+biasMark(item.present)+'</span> F<span class="bias-part '+biasKind(item.projected)+'">'+biasMark(item.projected)+'</span></span></span>';
+  }).join('<span style="color:#45596e">|</span>');
   const rows=levels.map(level=>{
     const kind=level.type==='SUPPORT'?'support':'resistance';
     const direction=level.status==='BUY'?'buy':level.status==='SELL'?'sell':'waiting';
@@ -614,6 +651,7 @@ function renderAsset(asset){
     : 'NO TRADE · No level passed the strict confirmation filters.';
   return '<section class="levels-asset">'
     +'<div class="levels-asset-title">'+(asset.asset==='BTC'?'BITCOIN (BTC)':'GOLD (XAUUSD)')+'</div>'
+    +'<div class="bias-block"><div class="bias-heading">TIMEFRAME BIAS · H = HISTORICAL · P = PRESENT · F = PROJECTED</div><div class="bias-line">'+biasLine+'</div></div>'
     +'<div class="levels-head"><div>Rank</div><div>Support / Resistance</div><div>Exact Level Price</div><div>Distance</div><div>Strength Score</div><div>Status</div></div>'
     +(rows||'<div class="levels-empty">'+emptyMessage+'</div>')
     +'</section>';
@@ -621,11 +659,33 @@ function renderAsset(asset){
 function renderLevels(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
+  assets.forEach(asset=>updateLivePrice(asset.asset,asset.live_reference_price));
   root.innerHTML=assets.length
     ? assets.map(renderAsset).join('')
     : '<div class="levels-empty">WARMING UP · Waiting for market history and live candles.</div>';
 }
 let refreshInFlight=false;
+function updateLivePrice(asset,price){
+  const node=$('livePrice'+asset);
+  if(!node || price===null || price===undefined || !Number.isFinite(Number(price))) return;
+  node.textContent=number(price,asset==='BTC'?1:3);
+}
+function connectLivePrices(){
+  if(!('WebSocket' in window)) return;
+  const scheme=location.protocol==='https:'?'wss:':'ws:';
+  const socket=new WebSocket(scheme+'//'+location.host+'/ws/prices');
+  socket.onmessage=event=>{
+    try{
+      const payload=JSON.parse(event.data);
+      if(payload.type!=='prices') return;
+      for(const [asset,item] of Object.entries(payload.assets||{})){
+        if(item.price!==null && item.price!==undefined) updateLivePrice(asset,item.price);
+      }
+    }catch(error){console.warn('Live price packet parse failed',error);}
+  };
+  socket.onclose=()=>setTimeout(connectLivePrices,1500);
+  socket.onerror=()=>socket.close();
+}
 async function fetchJson(url){
   const response=await fetch(url,{cache:'no-store'});
   if(!response.ok) throw new Error(url+' returned '+response.status);
@@ -648,6 +708,7 @@ async function refresh(){
     refreshInFlight=false;
   }
 }
+connectLivePrices();
 refresh();
 setInterval(refresh,1000);
 </script>
