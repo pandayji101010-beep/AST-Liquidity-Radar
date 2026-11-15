@@ -1268,7 +1268,7 @@ async def startup() -> None:
     )
     background_tasks.append(bootstrap_task)
     if STRATEGY_ALERTS_ENABLED:
-        alert_task = asyncio.create_task(strategy_alert_worker(), name="strategy-telegram-alerts")
+        alert_task = asyncio.create_task(strategy_alert_worker(), name="market-level-telegram-alerts")
         background_tasks.append(alert_task)
         log.info("Market-level Telegram alerts enabled; monitoring every %.1f seconds", STRATEGY_ALERT_POLL_SECONDS)
     else:
@@ -1518,22 +1518,18 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST 9/15 EMA: HTF trend (4H/1H), middle setups (30M/15M), 5M pullback and 1M rejection + confirmed BOS trigger.",
+        "strategy": "AST High-Confidence Market Levels: historical reaction-tested support/resistance, merged across 1D/4H/1H/30M/15M.",
         "strategy_engine": {
-            "higher_timeframe": "EMA9/EMA15 alignment, slope, separation and strength on completed 4H/1H bars.",
-            "middle_timeframe": "EMA crossover/continuation, EMA-zone pullback, rejection and momentum on 30M/15M.",
-            "entry_timeframe": "5M EMA pullback confirmation plus 1M rejection, confirmed micro BOS and close through the trigger candle.",
-            "risk_management": "Structure-based swing stop and 2R target; invalid or missing stops are rejected.",
+            "level_sources": "Confirmed swing highs/lows, historical touches and reactions, volume, and multi-timeframe confluence.",
+            "level_validation": "Only fresh, unbroken zones that pass the measured reaction-rate and strength-score filters are displayed.",
+            "entry_confirmation": "Price must reach the zone; closed 5M rejection and 1M structure break must agree with higher-timeframe market structure.",
+            "risk_management": "Structural stop beyond the zone; BUY/SELL is blocked unless the nearest valid target supports at least 1:2 risk/reward.",
+            "display": "Rank, support/resistance, exact price, distance, strength score, and BUY/SELL/WAITING status only.",
         },
         "minimum_risk_reward": 2.0,
-        "backtest_combinations": {
-            "A": "4H → 1H → 30M → 15M → 5M → 1M",
-            "B": "1H → 30M → 15M → 5M → 1M",
-            "C": "15M → 5M → 1M",
-        },
-        "backtest_entry": "Closed 1M trigger confirmation; enter next 1M open only if price has not returned through the trigger.",
-        "backtest_history_limit": HISTORY_BARS,
-        "historical_trade_endpoint": "/api/backtest/{asset}/{combination}",
+        "level_timeframes": ["1D", "4H", "1H", "30M", "15M"],
+        "entry_timeframes": ["5M", "1M"],
+        "historical_reaction_probability": "Calculated from counted historical level tests and subsequent reactions; never assumed or guaranteed.",
 
 
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
@@ -1546,7 +1542,7 @@ async def config() -> dict[str, Any]:
             "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
             "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
-            "The AST 9/15 EMA live and historical engines use the same point-in-time evaluator; every higher-timeframe bar must be fully closed before it confirms a lower-timeframe signal.",
+            "All level discovery, reaction statistics and entry confirmations use completed candles only.",
             "Historical entries are simulated at the next candle open; stop/target collisions in one candle assume stop first when lower-timeframe evidence is unavailable.",
         ],
     }
