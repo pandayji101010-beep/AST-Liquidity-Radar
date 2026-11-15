@@ -1249,8 +1249,8 @@ async def initialize_market_data_and_workers() -> None:
     except Exception:
         log.exception("Historical bootstrap failed; live market streams remain active")
 
-    # Strategy replay runs off the request path. The dashboard API returns the
-    # latest completed cache immediately, even while a 25k-bar replay is warming.
+    # Level discovery runs in the background. The dashboard API returns the
+    # latest completed level snapshot immediately while candle history warms up.
     background_tasks.append(
         asyncio.create_task(strategy_snapshot_worker(), name="market-levels-snapshot-cache")
     )
@@ -1543,6 +1543,6 @@ async def config() -> dict[str, Any]:
             "The Vantage MT5 bridge remains a separate read-only broker feed and takes authority over GOLD candles only after native broker OHLC bootstrap.",
             "The exchange feed does not reveal every trader's stop or exact liquidation price.",
             "All level discovery, reaction statistics and entry confirmations use completed candles only.",
-            "Historical entries are simulated at the next candle open; stop/target collisions in one candle assume stop first when lower-timeframe evidence is unavailable.",
+            "Historical reaction frequency is an observed sample statistic, not a forecast or a guarantee of future performance.",
         ],
     }
