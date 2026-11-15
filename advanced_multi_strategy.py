@@ -427,7 +427,10 @@ class AdvancedMultiStrategyEngine:
                 elif target_hit:
                     exit_price, status = target, "WIN"
             if exit_price is not None and status:
-                result_r = (exit_price - entry) / risk if side == "BUY" else (entry - exit_price) / risk
+                realized_price_r = (exit_price - entry) / risk if side == "BUY" else (entry - exit_price) / risk
+                # The strategy's result model is fixed to +2R / -1R as specified.
+                # The actual price-derived R is retained separately for gap diagnostics.
+                result_r = TARGET_R if status == "WIN" else -1.0
                 return {
                     "trade_id": f"{asset}:{timeframe}:{signal_time}:{side}",
                     "asset": asset,
@@ -442,6 +445,7 @@ class AdvancedMultiStrategyEngine:
                     "exit_price": round(exit_price, 8),
                     "result": status,
                     "result_r": round(result_r, 4),
+                    "realized_price_r": round(realized_price_r, 4),
                     "target_r": TARGET_R,
                     "exit_reason": "SL_FIRST_SAME_CANDLE" if stop_hit and target_hit else ("STOP_LOSS" if status == "LOSS" else "TAKE_PROFIT"),
                 }
