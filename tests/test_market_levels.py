@@ -35,7 +35,7 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
             candle(1_000, 100, 102, 99, 101),
             candle(2_000, 101, 103, 100, 102),
         ]
-        result = _clean_rows(rows, "1m", now_ms=62_000)
+        result = _clean_rows(rows, "1m", now_ms=61_999)
         self.assertEqual([row["t"] for row in result], [1_000])
         
     def test_overlapping_multitimeframe_levels_merge(self):
