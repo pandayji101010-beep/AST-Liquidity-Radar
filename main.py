@@ -1390,7 +1390,7 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
 
 
 async def strategy_snapshot_worker() -> None:
-    """Keep each timeframe's live evaluation and historical backtest cache warm."""
+    """Keep confirmed market levels and live confirmation status up to date."""
     while True:
         try:
             await refresh_strategy_scanner_cache()
