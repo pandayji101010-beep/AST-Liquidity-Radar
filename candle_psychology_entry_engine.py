@@ -290,7 +290,10 @@ def evaluate_level(
     accepted = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
     reaction_index = None
     reaction_tags: list[str] = []
-    for index in range(max(1, len(one) - 4), len(one)):
+    # Require a level rejection with enough closed candles afterwards to form
+    # and confirm a separate micro swing sequence.
+    reaction_start = max(1, len(one) - 10)
+    for index in range(len(one) - 5, reaction_start - 1, -1):
         row = one[index]
         touched = _num(row.get("l")) <= zone_high and _num(row.get("h")) >= zone_low
         if not touched:
@@ -308,47 +311,98 @@ def evaluate_level(
         if matched and reclaimed:
             reaction_index = index
             reaction_tags = matched
+            break
 
     if reaction_index is None:
-        return _waiting("WAITING_FOR_CANDLE_REACTION", approach)
+        return _waiting("WAITING_FOR_LEVEL_REJECTION", approach)
 
-    # Local micro confirmation: either the reaction candle itself is a clear
-    # engulfing/displacement/rejection reclaim, or the next closed 1m candle
-    # breaks the nearby micro high/low. No distant timeframe must agree.
+    # BUY: rejection low -> local push high -> higher-low pullback -> close
+    # above the push high. SELL is the exact inverse.
     latest = one[-1]
     op, high, low, close = (_num(latest.get(key)) for key in ("o", "h", "l", "c"))
     latest_metrics = candle_metrics(latest, atr)
-    prior_micro = one[-4:-1]
+    micro_buffer = max(atr * 0.03, level_price * 0.000001)
+    micro_confirmed = False
+    micro_tags: list[str] = []
+    micro_swing_price = 0.0
+    pullback_price = 0.0
+
     if side == "BUY":
-        micro_break = bool(prior_micro) and close > max(_num(row.get("h")) for row in prior_micro)
-        immediate_reaction = (
-            reaction_index == len(one) - 1
-            and close > op and close > level_price
-            and (
-                latest_metrics["lower_wick_pct"] >= 30.0
-                or "BULLISH_ENGULFING" in reaction_tags
-                or "STRONG_BODY_BULLISH" in reaction_tags
+        reaction_extreme = _num(one[reaction_index].get("l"))
+        for pullback_index in range(reaction_index + 3, len(one) - 1):
+            pullback_low = _num(one[pullback_index].get("l"))
+            left_low = _num(one[pullback_index - 1].get("l"))
+            right_low = _num(one[pullback_index + 1].get("l"))
+            is_higher_low = (
+                pullback_low < left_low
+                and pullback_low <= right_low
+                and pullback_low > reaction_extreme + micro_buffer
             )
-        )
-        micro_confirmed = micro_break or immediate_reaction
-        directional_close = close > op and close > level_price and latest_metrics["close_position"] >= 0.52
+            if not is_higher_low:
+                continue
+            prior_push = one[reaction_index + 1:pullback_index]
+            if len(prior_push) < 2:
+                continue
+            swing_high = max(_num(item.get("h")) for item in prior_push)
+            if swing_high <= level_price + micro_buffer:
+                continue
+            if any(
+                _num(item.get("l")) <= pullback_low
+                for item in one[pullback_index + 1:-1]
+            ):
+                continue
+            if close > swing_high + micro_buffer:
+                micro_confirmed = (
+                    close > op
+                    and latest_metrics["close_position"] >= 0.60
+                    and latest_metrics["body"] >= max(atr * 0.08, micro_buffer)
+                )
+                if micro_confirmed:
+                    micro_swing_price = swing_high
+                    pullback_price = pullback_low
+                    micro_tags = ["MICRO_HIGHER_LOW", "MICRO_BOS_BULLISH"]
+                    break
     else:
-        micro_break = bool(prior_micro) and close < min(_num(row.get("l")) for row in prior_micro)
-        immediate_reaction = (
-            reaction_index == len(one) - 1
-            and close < op and close < level_price
-            and (
-                latest_metrics["upper_wick_pct"] >= 30.0
-                or "BEARISH_ENGULFING" in reaction_tags
-                or "STRONG_BODY_BEARISH" in reaction_tags
+        reaction_extreme = _num(one[reaction_index].get("h"))
+        for pullback_index in range(reaction_index + 3, len(one) - 1):
+            pullback_high = _num(one[pullback_index].get("h"))
+            left_high = _num(one[pullback_index - 1].get("h"))
+            right_high = _num(one[pullback_index + 1].get("h"))
+            is_lower_high = (
+                pullback_high > left_high
+                and pullback_high >= right_high
+                and pullback_high < reaction_extreme - micro_buffer
             )
-        )
-        micro_confirmed = micro_break or immediate_reaction
-        directional_close = close < op and close < level_price and latest_metrics["close_position"] <= 0.48
+            if not is_lower_high:
+                continue
+            prior_push = one[reaction_index + 1:pullback_index]
+            if len(prior_push) < 2:
+                continue
+            swing_low = min(_num(item.get("l")) for item in prior_push)
+            if swing_low >= level_price - micro_buffer:
+                continue
+            if any(
+                _num(item.get("h")) >= pullback_high
+                for item in one[pullback_index + 1:-1]
+            ):
+                continue
+            if close < swing_low - micro_buffer:
+                micro_confirmed = (
+                    close < op
+                    and latest_metrics["close_position"] <= 0.40
+                    and latest_metrics["body"] >= max(atr * 0.08, micro_buffer)
+                )
+                if micro_confirmed:
+                    micro_swing_price = swing_low
+                    pullback_price = pullback_high
+                    micro_tags = ["MICRO_LOWER_HIGH", "MICRO_BOS_BEARISH"]
+                    break
 
-    if not micro_confirmed or not directional_close:
-        return _waiting("WAITING_FOR_MICRO_CONFIRMATION", approach)
+    if not micro_confirmed:
+        return _waiting("WAITING_FOR_MICRO_STRUCTURE_SHIFT", approach)
 
+    entry = close
+    local_reaction = one[reaction_index:]
     entry = close
     local_reaction = one[max(0, reaction_index - 1):]
     stop_buffer = max(atr * 0.20, half_width * 0.10, entry * 0.00002)
@@ -397,7 +451,9 @@ def evaluate_level(
         "take_profit": round(target, 8),
         "risk_reward": round(abs(target - entry) / risk, 3),
         "signal_time": int(_num(latest.get("t"))),
-        "patterns": sorted(set(reaction_tags)),
+        "patterns": sorted(set(reaction_tags + micro_tags)),
+        "micro_swing_price": round(micro_swing_price, 8),
+        "micro_pullback_price": round(pullback_price, 8),
     }
 
 
