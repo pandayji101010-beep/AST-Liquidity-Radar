@@ -299,7 +299,14 @@ def evaluate_level(
         if not touched:
             continue
         analysis = candle_patterns(one, index, level)
-        matched = [tag for tag in analysis["patterns"] if tag in accepted]
+        displacement_only = "STRONG_BODY_BULLISH" if side == "BUY" else "STRONG_BODY_BEARISH"
+        # A strong candle moving away from the level is not, by itself,
+        # evidence of a rejection at the level. Require wick/sweep/engulfing
+        # or another level-specific reaction tag to start the micro sequence.
+        matched = [
+            tag for tag in analysis["patterns"]
+            if tag in accepted and tag != displacement_only
+        ]
         close = _num(row.get("c"))
         op = _num(row.get("o"))
         close_pos = analysis["metrics"].get("close_position", 0.5)
