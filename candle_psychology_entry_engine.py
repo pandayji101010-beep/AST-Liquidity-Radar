@@ -351,11 +351,12 @@ def evaluate_level(
     approach_limit = max(half_width * 4.0, atr5 * 1.5, price * 0.00015)
     if distance_to_zone > approach_limit:
         return {**waiting, "reason": "PRICE_NOT_NEAR_LEVEL", "approach": approach}
+    # A decisive closed-candle level break is the primary cancellation reason.
+    if _broken_before_entry(side, level, five_minute, one_minute, atr1):
+        return {**waiting, "reason": "LEVEL_BROKEN", "approach": approach}
     expected_approach = "FROM_ABOVE" if side == "BUY" else "FROM_BELOW"
     if approach not in (expected_approach, "INSIDE_ZONE"):
         return {**waiting, "reason": "APPROACH_SIDE_MISMATCH", "approach": approach}
-    if _broken_before_entry(side, level, five_minute, one_minute, atr1):
-        return {**waiting, "reason": "LEVEL_BROKEN", "approach": approach}
 
     required_bias = "BULLISH" if side == "BUY" else "BEARISH"
     bias_1h = _market_bias(one_hour)
