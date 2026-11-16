@@ -26,7 +26,7 @@ def _num(value: Any, default: float = 0.0) -> float:
 
 def _rows(data: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
     value = data.get(timeframe) or []
-    return list(value)
+    return value if isinstance(value, list) else list(value)
 
 
 def _atr(candles: list[dict[str, Any]], period: int = 14) -> float:
@@ -115,7 +115,7 @@ def candle_patterns(
         return {"patterns": [], "metrics": {}, "volume_reliable": False}
     candle = candles[index]
     op, high, low, close = (_num(candle.get(key)) for key in ("o", "h", "l", "c"))
-    atr = _atr(candles[:index + 1])
+    atr = _atr(candles[max(0, index - 14):index + 1])
     metrics = candle_metrics(candle, atr)
     body = metrics["body"]
     upper = metrics["upper_wick"]
@@ -422,7 +422,12 @@ class CandlePsychologyEntryEngine:
             if stale_key not in active_keys:
                 self._triggered.pop(stale_key, None)
 
-        one_minute = _rows(candles_by_tf, "1m")
+        # Materialize the shared candle deques once per refresh, not once per level.
+        candle_data = {
+            timeframe: _rows(candles_by_tf, timeframe)
+            for timeframe in ("1m", "5m", "15m", "1h")
+        }
+        one_minute = candle_data["1m"]
         current_time = int(one_minute[-1].get("t", 0)) if one_minute else 0
         results: dict[str, dict[str, Any]] = {}
         for level in active_levels:
@@ -439,7 +444,7 @@ class CandlePsychologyEntryEngine:
                     }
                 continue
 
-            result = evaluate_level(level, active_levels, candles_by_tf, live_price)
+            result = evaluate_level(level, active_levels, candle_data, live_price)
             if result.get("action") in ("BUY", "SELL"):
                 self._triggered[key] = dict(result)
             results[key] = result
