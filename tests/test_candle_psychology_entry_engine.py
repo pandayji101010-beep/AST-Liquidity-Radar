@@ -146,8 +146,7 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         level, data, price = bullish_setup()
         # Keep only the rejection plus an incomplete first push. A wick alone
         # is not a BUY plan until a higher-low forms and the micro high breaks.
-        data["1m"] = data["1m"][:11]
-        data["1m"][-1] = candle(END_TIME - 6 * 60_000, 100.62, 100.95, 100.45, 100.82)
+        data["1m"] = data["1m"][:13]
         result = evaluate_level(level, [level], data, 100.82, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "WAITING_FOR_MICRO_STRUCTURE_SHIFT")
@@ -168,10 +167,8 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
 
     def test_wrong_approach_side_does_not_give_buy(self):
         level, data, _price = bullish_setup()
-        data["1m"][:8] = [
-            candle(row["t"], 99.55, 99.75, 99.25, 99.40)
-            for row in data["1m"][:8]
-        ]
+        data["1m"][-6] = candle(END_TIME - 6 * 60_000, 99.55, 99.70, 99.25, 99.40)
+        data["1m"][-5] = candle(END_TIME - 5 * 60_000, 99.70, 100.10, 99.55, 99.95)
         result = evaluate_level(level, [level], data, 100.05, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "APPROACH_SIDE_MISMATCH")
