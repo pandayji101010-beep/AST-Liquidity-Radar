@@ -29,6 +29,16 @@ def _rows(data: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
     return value if isinstance(value, list) else list(value)
 
 
+def _closed_rows(data: dict[str, Any], timeframe: str, as_of_ms: int) -> list[dict[str, Any]]:
+    """Exclude every candle whose scheduled close is later than the decision time."""
+    interval = TIMEFRAME_MS[timeframe]
+    return [
+        row for row in _rows(data, timeframe)
+        if int(_num(row.get("t"))) > 0
+        and int(_num(row.get("t"))) + interval <= int(as_of_ms)
+    ]
+
+
 def _atr(candles: list[dict[str, Any]], period: int = 14) -> float:
     if len(candles) < 2:
         return 0.0
@@ -257,11 +267,47 @@ def _broken_before_entry(
     return False
 
 
+def _has_15m_level_reaction(
+    candles: list[dict[str, Any]],
+    level: dict[str, Any],
+    side: str,
+    lookback: int = 12,
+) -> tuple[bool, list[str]]:
+    """Require a recent directional 15m close after that timeframe tests this level."""
+    if len(candles) < 3:
+        return False, []
+    level_price = _num(level.get("price"))
+    lower = _num(level.get("zone_low"), level_price)
+    upper = _num(level.get("zone_high"), level_price)
+    accepted = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
+    start = max(0, len(candles) - lookback)
+    for index in range(start, len(candles)):
+        candle = candles[index]
+        if _num(candle.get("l")) > upper or _num(candle.get("h")) < lower:
+            continue
+        analysis = candle_patterns(candles, index, level)
+        matched = [tag for tag in analysis["patterns"] if tag in accepted]
+        op, high, low, close = (
+            _num(candle.get(key)) for key in ("o", "h", "l", "c")
+        )
+        close_position = (close - low) / max(high - low, 1e-12)
+        directional_close = (
+            close > op and close >= level_price and close_position >= 0.55
+            if side == "BUY"
+            else close < op and close <= level_price and close_position <= 0.45
+        )
+        if matched or directional_close:
+            return True, matched or (["15M_BULLISH_LEVEL_CONTEXT"] if side == "BUY"
+                                     else ["15M_BEARISH_LEVEL_CONTEXT"])
+    return False, []
+
+
 def evaluate_level(
     level: dict[str, Any],
     active_levels: list[dict[str, Any]],
     candles_by_tf: dict[str, Any],
     live_price: float | None,
+    as_of_ms: int | None = None,
 ) -> dict[str, Any]:
     """One deterministic confirmation path shared by live evaluation and historical replay."""
     level_type = str(level.get("type", "")).upper()
@@ -269,11 +315,16 @@ def evaluate_level(
     waiting = {"action": "WAITING", "reason": "NO_CANDLE_CONFIRMATION"}
     if side is None:
         return waiting
+    if as_of_ms is None:
+        import time
+        as_of_ms = int(time.time() * 1000)
 
-    one_minute = _rows(candles_by_tf, "1m")
-    five_minute = _rows(candles_by_tf, "5m")
-    fifteen_minute = _rows(candles_by_tf, "15m")
-    one_hour = _rows(candles_by_tf, "1h")
+    # Live and replay both make decisions from candles that have fully closed
+    # by the same explicit decision timestamp.
+    one_minute = _closed_rows(candles_by_tf, "1m", as_of_ms)
+    five_minute = _closed_rows(candles_by_tf, "5m", as_of_ms)
+    fifteen_minute = _closed_rows(candles_by_tf, "15m", as_of_ms)
+    one_hour = _closed_rows(candles_by_tf, "1h", as_of_ms)
     price = _num(live_price, _num(one_minute[-1].get("c")) if one_minute else 0.0)
     if price <= 0:
         return {**waiting, "reason": "NO_LIVE_PRICE"}
@@ -300,6 +351,9 @@ def evaluate_level(
     approach_limit = max(half_width * 4.0, atr5 * 1.5, price * 0.00015)
     if distance_to_zone > approach_limit:
         return {**waiting, "reason": "PRICE_NOT_NEAR_LEVEL", "approach": approach}
+    expected_approach = "FROM_ABOVE" if side == "BUY" else "FROM_BELOW"
+    if approach not in (expected_approach, "INSIDE_ZONE"):
+        return {**waiting, "reason": "APPROACH_SIDE_MISMATCH", "approach": approach}
     if _broken_before_entry(side, level, five_minute, one_minute, atr1):
         return {**waiting, "reason": "LEVEL_BROKEN", "approach": approach}
 
@@ -310,6 +364,16 @@ def evaluate_level(
         return {
             **waiting,
             "reason": "TIMEFRAME_CONFLICT_OR_NOT_ALIGNED",
+            "approach": approach,
+            "bias_1h": bias_1h,
+            "bias_15m": bias_15m,
+        }
+
+    m15_reacted, m15_tags = _has_15m_level_reaction(fifteen_minute, level, side)
+    if not m15_reacted:
+        return {
+            **waiting,
+            "reason": "15M_LEVEL_REACTION_MISSING",
             "approach": approach,
             "bias_1h": bias_1h,
             "bias_15m": bias_15m,
@@ -398,7 +462,7 @@ def evaluate_level(
         "take_profit": round(target, 8),
         "risk_reward": round(rr, 3),
         "signal_time": int(current.get("t", 0)),
-        "patterns": sorted(set(reaction_tags + last_pattern["patterns"])),
+        "patterns": sorted(set(m15_tags + reaction_tags + last_pattern["patterns"])),
         "bias_1h": bias_1h,
         "bias_15m": bias_15m,
     }
@@ -416,7 +480,11 @@ class CandlePsychologyEntryEngine:
         active_levels: list[dict[str, Any]],
         candles_by_tf: dict[str, Any],
         live_price: float | None,
+        as_of_ms: int | None = None,
     ) -> dict[str, dict[str, Any]]:
+        if as_of_ms is None:
+            import time
+            as_of_ms = int(time.time() * 1000)
         active_keys = {level_key(level) for level in active_levels}
         for stale_key in list(self._triggered):
             if stale_key not in active_keys:
@@ -424,7 +492,7 @@ class CandlePsychologyEntryEngine:
 
         # Materialize the shared candle deques once per refresh, not once per level.
         candle_data = {
-            timeframe: _rows(candles_by_tf, timeframe)
+            timeframe: _closed_rows(candles_by_tf, timeframe, as_of_ms)
             for timeframe in ("1m", "5m", "15m", "1h")
         }
         one_minute = candle_data["1m"]
@@ -444,7 +512,7 @@ class CandlePsychologyEntryEngine:
                     }
                 continue
 
-            result = evaluate_level(level, active_levels, candle_data, live_price)
+            result = evaluate_level(level, active_levels, candle_data, live_price, as_of_ms)
             if result.get("action") in ("BUY", "SELL"):
                 self._triggered[key] = dict(result)
             results[key] = result
@@ -461,7 +529,10 @@ def backtest_trades(
     for index, step in enumerate(candles_by_step):
         timestamp = int(step.get("time", 0))
         levels = levels_by_step[index] if index < len(levels_by_step) else []
-        signals = engine.evaluate(levels, step.get("candles", {}), step.get("price"))
+        decision_time = timestamp + TIMEFRAME_MS["1m"]
+        signals = engine.evaluate(
+            levels, step.get("candles", {}), step.get("price"), as_of_ms=decision_time
+        )
         for key, signal in signals.items():
             if signal.get("action") not in ("BUY", "SELL") or int(signal.get("signal_time", -1)) != timestamp:
                 continue
