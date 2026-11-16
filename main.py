@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from bisect import bisect_right
 import json
 import logging
 import math
@@ -26,6 +27,7 @@ from historical_sources import (
     load_binance_tradfi_gold_live,
 )
 from market_levels_engine import HighConfidenceMarketLevelsEngine
+from candle_psychology_entry_engine import CandlePsychologyEntryEngine, TIMEFRAME_MS, level_key
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -122,10 +124,12 @@ class AssetState:
     trend_lock_since: int | None = None
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     market_levels_engine: HighConfidenceMarketLevelsEngine = field(init=False)
+    candle_psychology_engine: CandlePsychologyEntryEngine = field(init=False)
     data_source: str | None = None
 
     def __post_init__(self) -> None:
         self.market_levels_engine = HighConfidenceMarketLevelsEngine(self.key)
+        self.candle_psychology_engine = CandlePsychologyEntryEngine(self.key)
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
     binance_tradfi_stream_active: bool = False
@@ -1376,6 +1380,20 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
                 state.candles,
                 state.mark_price,
             )
+            # Independent entry engine consumes the existing engine's active levels read-only.
+            active_levels = list(state.market_levels_engine._levels_cache)
+            entry_states = state.candle_psychology_engine.evaluate(
+                active_levels,
+                state.candles,
+                state.mark_price,
+            )
+            for displayed_level in result.get("levels", []):
+                lookup = {
+                    "type": displayed_level.get("type"),
+                    "price": displayed_level.get("level_price"),
+                }
+                entry = entry_states.get(level_key(lookup), {"action": "WAITING"})
+                displayed_level["entry_action"] = entry.get("action", "WAITING")
             result["data_source"] = state.data_source or "Source not reported"
             assets.append(result)
             await asyncio.sleep(0)
@@ -1403,7 +1421,7 @@ async def strategy_snapshot_worker() -> None:
 
 @app.get("/api/strategy")
 async def strategy_scanner() -> dict[str, Any]:
-    """Return only validated support/resistance levels and their live status."""
+    """Return validated support/resistance levels plus the independent entry action."""
     if _strategy_scanner_cache is not None:
         return _strategy_scanner_cache
     return {
@@ -1412,6 +1430,138 @@ async def strategy_scanner() -> dict[str, Any]:
         "assets": [],
         "status": "WARMING UP",
     }
+
+
+def _run_candle_psychology_backtest(state: AssetState, requested_bars: int) -> dict[str, Any]:
+    """Point-in-time replay; live and historical paths share CandlePsychologyEntryEngine.evaluate."""
+    history = {timeframe: list(state.candles.get(timeframe, [])) for timeframe in TIMEFRAMES}
+    one_minute = history.get("1m", [])
+    if len(one_minute) < 300 or any(len(history.get(tf, [])) < 30 for tf in ("5m", "15m", "1h")):
+        return {
+            "asset": state.key,
+            "status": "WARMING UP",
+            "message": "Need at least 300 closed 1m candles and 30 closed candles on 5m, 15m and 1h.",
+            "trades": [],
+        }
+
+    start_index = max(0, len(one_minute) - requested_bars)
+    start_time = int(one_minute[start_index]["t"])
+    working: dict[str, list[dict[str, Any]]] = {}
+    pointers: dict[str, int] = {}
+    close_times: dict[str, list[int]] = {}
+    for timeframe in TIMEFRAMES:
+        rows = history.get(timeframe, [])
+        interval = TIMEFRAME_MS[timeframe]
+        close_times[timeframe] = [int(row["t"]) + interval for row in rows]
+        pointers[timeframe] = bisect_right(close_times[timeframe], start_time)
+        working[timeframe] = rows[:pointers[timeframe]]
+
+    level_engine = HighConfidenceMarketLevelsEngine(state.key)
+    initial_price = (
+        float(one_minute[start_index - 1]["c"])
+        if start_index > 0 else float(one_minute[start_index]["o"])
+    )
+    level_engine.snapshot(working, initial_price)
+    active_levels = list(level_engine._levels_cache)
+    entry_engine = CandlePsychologyEntryEngine(state.key)
+    trades: list[dict[str, Any]] = []
+    seen_signals: set[str] = set()
+    higher_timeframes = ("1d", "4h", "1h", "30m", "15m")
+
+    for minute_index in range(start_index, len(one_minute)):
+        candle = one_minute[minute_index]
+        candle_close_time = int(candle["t"]) + TIMEFRAME_MS["1m"]
+        higher_timeframe_changed = False
+        for timeframe in TIMEFRAMES:
+            rows = history.get(timeframe, [])
+            pointer = pointers[timeframe]
+            interval = TIMEFRAME_MS[timeframe]
+            while pointer < len(rows) and int(rows[pointer]["t"]) + interval <= candle_close_time:
+                working[timeframe].append(rows[pointer])
+                pointer += 1
+                if timeframe in higher_timeframes:
+                    higher_timeframe_changed = True
+            pointers[timeframe] = pointer
+
+        # Level source timeframes are only refreshed after their own candle closes.
+        if higher_timeframe_changed:
+            level_engine.snapshot(working, float(candle["c"]))
+            active_levels = list(level_engine._levels_cache)
+
+        evaluations = entry_engine.evaluate(active_levels, working, float(candle["c"]))
+        for key, signal in evaluations.items():
+            if signal.get("action") not in ("BUY", "SELL"):
+                continue
+            if int(signal.get("signal_time", -1)) != int(candle["t"]):
+                continue
+            signal_id = f"{key}:{signal.get('signal_time')}"
+            if signal_id in seen_signals:
+                continue
+            seen_signals.add(signal_id)
+            trades.append({
+                "level_key": key,
+                "side": signal["action"],
+                "entry": signal["entry"],
+                "stop_loss": signal["stop_loss"],
+                "take_profit": signal["take_profit"],
+                "risk_reward": signal["risk_reward"],
+                "signal_time": signal["signal_time"],
+                "patterns": signal.get("patterns", []),
+                "bar_index": minute_index,
+            })
+
+    wins = losses = open_trades = 0
+    for trade in trades:
+        side = trade["side"]
+        stop = float(trade["stop_loss"])
+        target = float(trade["take_profit"])
+        outcome = "OPEN"
+        for future in one_minute[int(trade["bar_index"]) + 1:]:
+            high, low = float(future["h"]), float(future["l"])
+            stop_hit = low <= stop if side == "BUY" else high >= stop
+            target_hit = high >= target if side == "BUY" else low <= target
+            # Conservative OHLC handling: when both are hit in one candle, count the stop first.
+            if stop_hit:
+                outcome = "LOSS"
+                break
+            if target_hit:
+                outcome = "WIN"
+                break
+        trade["outcome"] = outcome
+        if outcome == "WIN":
+            wins += 1
+        elif outcome == "LOSS":
+            losses += 1
+        else:
+            open_trades += 1
+
+    closed = wins + losses
+    return {
+        "asset": state.key,
+        "status": "READY",
+        "ruleset": "CandlePsychologyEntryEngine.evaluate (same as live)",
+        "bars_requested": requested_bars,
+        "bars_replayed": len(one_minute) - start_index,
+        "trades": trades,
+        "summary": {
+            "total": len(trades),
+            "wins": wins,
+            "losses": losses,
+            "open": open_trades,
+            "win_rate_pct": round(wins / closed * 100.0, 2) if closed else None,
+        },
+        "fill_model": "1m close entry; OHLC exit with stop-first conservative handling; fees/slippage excluded.",
+    }
+
+
+@app.get("/api/candle-psychology/backtest")
+async def candle_psychology_backtest(
+    asset: str = Query("BTC", pattern="^(BTC|GOLD)$"),
+    bars: int = Query(3000, ge=300, le=5000),
+) -> dict[str, Any]:
+    """Run a point-in-time historical replay using the same rules as live entry confirmation."""
+    state = states[asset]
+    return await asyncio.to_thread(_run_candle_psychology_backtest, state, bars)
 
 
 @app.websocket("/ws/prices")
