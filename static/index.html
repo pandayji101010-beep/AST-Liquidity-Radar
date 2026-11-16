@@ -555,6 +555,7 @@ body{
 .levels-copy{border:1px solid #38536b;background:#172a3d;color:#cfe4f2;border-radius:6px;padding:4px 7px;font-size:9px;font-weight:850;letter-spacing:.04em;cursor:pointer;white-space:nowrap}
 .levels-copy:hover{border-color:#70c9e3;color:#fff}
 .levels-copy.copied{border-color:#286749;background:#102b22;color:#7be0a8}
+.levels-entry-action{display:inline-flex;align-items:center;justify-content:center;min-width:62px;padding:4px 7px;border-radius:6px;border:1px solid #5a5333;background:#25271f;color:#e7cf87;font-size:9px;font-weight:900;letter-spacing:.04em;white-space:nowrap}.levels-entry-action.buy{border-color:#286749;background:#102b22;color:#7be0a8}.levels-entry-action.sell{border-color:#7b343e;background:#321b20;color:#ff9ca4}.levels-entry-action.waiting{border-color:#5a5333;background:#25271f;color:#e7cf87}
 .levels-status{display:inline-flex;justify-content:center;min-width:68px;padding:6px 8px;border-radius:7px;font-size:10px;font-weight:900;letter-spacing:.04em;background:#152436;color:#dce8f2;border:1px solid #32485f}
 .levels-status.buy{background:#102b22;border-color:#286749;color:#7be0a8}
 .levels-status.sell{background:#321b20;border-color:#7b343e;color:#ff9ca4}
@@ -663,11 +664,13 @@ function renderAsset(asset){
     const kind=level.type==='SUPPORT'?'support':'resistance';
     const priceText=number(level.level_price,digits);
     const direction=level.status==='BUY'?'buy':level.status==='SELL'?'sell':'waiting';
+    const entryAction=['BUY','SELL'].includes(String(level.entry_action||'').toUpperCase())?String(level.entry_action).toUpperCase():'WAITING';
+    const entryClass=entryAction.toLowerCase();
     const distance=number(level.distance,digits)+(level.distance_pct===null||level.distance_pct===undefined?'':' · '+number(level.distance_pct,2)+'%');
     return '<div class="levels-row">'
       +'<div class="levels-cell"><div class="levels-label">Rank</div><div class="levels-value">'+escapeHtml(level.rank)+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Support / Resistance</div><div class="levels-value '+kind+'">'+(kind==='support'?'SUPPORT':'RESISTANCE')+'</div></div>'
-      +'<div class="levels-cell"><div class="levels-label">Exact Level Price</div><div class="levels-price-line"><div class="levels-value">'+priceText+'</div><button type="button" class="levels-copy" data-price="'+escapeHtml(priceText)+'" aria-label="Copy level price" onclick="copyLevelPrice(this)">COPY</button></div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Exact Level Price</div><div class="levels-price-line"><div class="levels-value">'+priceText+'</div><button type="button" class="levels-copy" data-price="'+escapeHtml(priceText)+'" aria-label="Copy level price" onclick="copyLevelPrice(this)">COPY</button><span class="levels-entry-action '+entryClass+'" aria-label="Candle psychology entry: '+entryAction+'">'+entryAction+'</span></div></div>'
       +'<div class="levels-cell"><div class="levels-label">Distance</div><div class="levels-value">'+distance+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Strength Score</div><div class="levels-value score">'+number(level.strength_score,0)+'/100</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Status</div><div class="levels-status '+direction+'">'+escapeHtml(level.status||'WAITING')+'</div></div>'
