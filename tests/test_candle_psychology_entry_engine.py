@@ -16,12 +16,16 @@ def candle(stamp, op, high, low, close, volume=100.0):
     return {"t": stamp, "o": op, "h": high, "l": low, "c": close, "v": volume}
 
 
-def rising_rows(count, interval, start=90.0, step=0.25):
+END_TIME = 1_700_000_000_000
+
+
+def rising_rows(count, interval, start=90.0, step=0.25, end_time=END_TIME):
     rows = []
+    first_stamp = end_time - count * interval
     for index in range(count):
         close = start + index * step
         rows.append(candle(
-            (index + 1) * interval,
+            first_stamp + index * interval,
             close - 0.08,
             close + 0.12,
             close - 0.15,
@@ -33,18 +37,20 @@ def rising_rows(count, interval, start=90.0, step=0.25):
 def bullish_setup():
     one_hour = rising_rows(60, 3_600_000, 80.0, 0.5)
     fifteen = rising_rows(60, 900_000, 90.0, 0.2)
+    five_start = END_TIME - 40 * 300_000
     five = [
-        candle(index * 300_000, 100.0, 100.2, 99.8, 100.02)
+        candle(five_start + index * 300_000, 100.0, 100.2, 99.8, 100.02)
         for index in range(39)
     ]
     # Closed 5m support rejection + reclaim / liquidity sweep.
-    five.append(candle(39 * 300_000, 100.0, 100.5, 98.8, 100.4))
+    five.append(candle(END_TIME - 300_000, 100.0, 100.5, 98.8, 100.4))
+    one_start = END_TIME - 200 * 60_000
     one = [
-        candle(index * 60_000, 100.0, 100.25, 99.8, 100.05)
+        candle(one_start + index * 60_000, 100.0, 100.25, 99.8, 100.05)
         for index in range(199)
     ]
     # The final closed 1m candle breaks the preceding five highs.
-    one.append(candle(199 * 60_000, 100.7, 102.0, 100.5, 101.8))
+    one.append(candle(END_TIME - 60_000, 100.7, 102.0, 100.5, 101.8))
     level = {
         "type": "SUPPORT",
         "price": 100.0,
@@ -129,7 +135,7 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
 
     def test_live_and_replay_use_the_same_evaluator_and_signal_time(self):
         level, data, price = bullish_setup()
-        live = evaluate_level(level, [level], data, price)
+        live = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         replay = backtest_trades(
             [[level]],
             [{"time": data["1m"][-1]["t"], "candles": data, "price": price}],
@@ -155,25 +161,32 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
             "zone_low": 99.5, "zone_high": 100.5, "half_width": 0.5,
         }
         one_hour = [
-            candle((i + 1) * 3_600_000, 160.08 - i * 0.5, 160.15 - i * 0.5,
-                   159.85 - i * 0.5, 160.0 - i * 0.5)
+            candle(END_TIME - 60 * 3_600_000 + i * 3_600_000,
+                   128.08 - i * 0.5, 128.15 - i * 0.5,
+                   127.85 - i * 0.5, 128.0 - i * 0.5)
             for i in range(60)
         ]
+        # 15m bearish context reaches and reacts at the resistance zone.
         fifteen = [
-            candle((i + 1) * 900_000, 120.08 - i * 0.2, 120.15 - i * 0.2,
-                   119.85 - i * 0.2, 120.0 - i * 0.2)
+            candle(END_TIME - 60 * 900_000 + i * 900_000,
+                   (111.3 - i * 0.2) + 0.08,
+                   (111.3 - i * 0.2) + 0.15,
+                   (111.3 - i * 0.2) - 0.05,
+                   111.3 - i * 0.2)
             for i in range(60)
         ]
+        five_start = END_TIME - 40 * 300_000
         five = [
-            candle(i * 300_000, 100.0, 100.2, 99.8, 100.02)
+            candle(five_start + i * 300_000, 100.0, 100.2, 99.8, 100.02)
             for i in range(39)
         ]
-        five.append(candle(39 * 300_000, 100.0, 101.2, 99.5, 99.6))
+        five.append(candle(END_TIME - 300_000, 100.0, 101.2, 99.5, 99.6))
+        one_start = END_TIME - 200 * 60_000
         one = [
-            candle(i * 60_000, 100.0, 100.2, 99.8, 100.05)
+            candle(one_start + i * 60_000, 100.0, 100.2, 99.8, 100.05)
             for i in range(199)
         ]
-        one.append(candle(199 * 60_000, 99.8, 100.0, 98.0, 98.3))
+        one.append(candle(END_TIME - 60_000, 99.8, 100.0, 98.0, 98.3))
         data = {"1h": one_hour, "15m": fifteen, "5m": five, "1m": one}
 
         patterns = candle_patterns(five, len(five) - 1, level)["patterns"]
@@ -202,6 +215,34 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         self.assertTrue(result["volume_reliable"])
         self.assertIn("REPEATED_BULLISH_REJECTION", result["patterns"])
         self.assertIn("VOLUME_ABSORPTION_BULLISH_PROXY", result["patterns"])
+
+
+    def test_open_candles_are_excluded_from_entry_decisions(self):
+        level, data, price = bullish_setup()
+        live = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
+        self.assertEqual(live["action"], "BUY")
+
+        # Append an unfinished 1m candle with a hypothetical even higher close.
+        data["1m"].append(candle(END_TIME, 101.8, 110.0, 101.5, 109.0))
+        replay = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
+        self.assertEqual(replay["action"], "BUY")
+        self.assertEqual(replay["signal_time"], live["signal_time"])
+
+    def test_wrong_approach_side_blocks_a_support_buy(self):
+        level, data, _price = bullish_setup()
+        result = evaluate_level(level, [level], data, 99.0, as_of_ms=END_TIME)
+        self.assertEqual(result["action"], "WAITING")
+        self.assertEqual(result["reason"], "APPROACH_SIDE_MISMATCH")
+
+    def test_15m_must_show_a_reaction_at_the_same_level(self):
+        level, data, price = bullish_setup()
+        for index in range(len(data["15m"]) - 12, len(data["15m"])):
+            stamp = data["15m"][index]["t"]
+            close = 105.0 + (index - (len(data["15m"]) - 12)) * 0.2
+            data["15m"][index] = candle(stamp, close - 0.08, close + 0.12, close - 0.15, close)
+        result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
+        self.assertEqual(result["action"], "WAITING")
+        self.assertEqual(result["reason"], "15M_LEVEL_REACTION_MISSING")
 
     def test_price_far_from_level_does_not_activate_reaction_entry(self):
         level, data, _price = bullish_setup()
