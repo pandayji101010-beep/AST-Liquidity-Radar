@@ -36,7 +36,7 @@ def bullish_setup():
     # Support sweep/reclaim at the level.
     rows.append(candle(END_TIME - 8 * 60_000, 100.00, 100.40, 99.30, 100.25))
     # First local push creates the micro swing high.
-    rows.append(candle(END_TIME - 7 * 60_000, 100.25, 100.75, 100.15, 100.62))
+    rows.append(candle(END_TIME - 7 * 60_000, 100.25, 100.75, 100.25, 100.62))
     rows.append(candle(END_TIME - 6 * 60_000, 100.62, 100.95, 100.45, 100.82))
     rows.append(candle(END_TIME - 5 * 60_000, 100.82, 100.85, 100.40, 100.60))
     # Confirmed higher-low pivot, then price holds above it.
@@ -161,6 +161,7 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
     def test_level_touch_without_rejection_stays_waiting(self):
         level, data, price = bullish_setup()
         data["1m"][8] = candle(END_TIME - 8 * 60_000, 100.1, 100.3, 99.9, 100.05)
+        data["1m"][9] = candle(END_TIME - 7 * 60_000, 100.25, 100.75, 100.25, 100.62)
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "WAITING_FOR_LEVEL_REJECTION")
