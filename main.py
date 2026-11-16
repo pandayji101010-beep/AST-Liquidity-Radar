@@ -1488,7 +1488,9 @@ def _run_candle_psychology_backtest(state: AssetState, requested_bars: int) -> d
             level_engine.snapshot(working, float(candle["c"]))
             active_levels = list(level_engine._levels_cache)
 
-        evaluations = entry_engine.evaluate(active_levels, working, float(candle["c"]))
+        evaluations = entry_engine.evaluate(
+            active_levels, working, float(candle["c"]), as_of_ms=candle_close_time
+        )
         for key, signal in evaluations.items():
             if signal.get("action") not in ("BUY", "SELL"):
                 continue
