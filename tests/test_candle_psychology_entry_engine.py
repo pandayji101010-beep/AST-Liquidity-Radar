@@ -28,14 +28,24 @@ SUPPORT = {
 
 
 def bullish_setup():
-    start = END_TIME - 15 * 60_000
+    start = END_TIME - 16 * 60_000
     rows = [
-        candle(start + index * 60_000, 100.45, 100.75, 100.30, 100.60)
-        for index in range(14)
+        candle(start + index * 60_000, 100.55, 100.80, 100.30, 100.60)
+        for index in range(8)
     ]
-    # Last closed 1m candle sweeps below support and closes back above it.
-    rows.append(candle(END_TIME - 60_000, 100.40, 100.55, 99.30, 100.50))
-    return SUPPORT.copy(), {"1m": rows}, 100.50
+    # Support sweep/reclaim at the level.
+    rows.append(candle(END_TIME - 8 * 60_000, 100.00, 100.40, 99.30, 100.25))
+    # First local push creates the micro swing high.
+    rows.append(candle(END_TIME - 7 * 60_000, 100.25, 100.75, 100.15, 100.62))
+    rows.append(candle(END_TIME - 6 * 60_000, 100.62, 100.95, 100.45, 100.82))
+    rows.append(candle(END_TIME - 5 * 60_000, 100.82, 100.85, 100.40, 100.60))
+    # Confirmed higher-low pivot, then price holds above it.
+    rows.append(candle(END_TIME - 4 * 60_000, 100.55, 100.65, 100.25, 100.42))
+    rows.append(candle(END_TIME - 3 * 60_000, 100.42, 100.75, 100.35, 100.62))
+    rows.append(candle(END_TIME - 2 * 60_000, 100.62, 100.80, 100.55, 100.72))
+    # Closed micro-BOS candle above the swing high.
+    rows.append(candle(END_TIME - 60_000, 100.75, 101.25, 100.68, 101.15))
+    return SUPPORT.copy(), {"1m": rows}, 101.15
 
 
 def bearish_setup():
@@ -47,14 +57,24 @@ def bearish_setup():
         "half_width": 0.2,
         "strength_score": 80,
     }
-    start = END_TIME - 15 * 60_000
+    start = END_TIME - 16 * 60_000
     rows = [
         candle(start + index * 60_000, 99.55, 99.70, 99.25, 99.40)
-        for index in range(14)
+        for index in range(8)
     ]
-    # Last closed 1m candle sweeps above resistance and closes back below.
-    rows.append(candle(END_TIME - 60_000, 100.10, 101.20, 99.95, 99.90))
-    return level, {"1m": rows}, 99.90
+    # Resistance sweep/rejection.
+    rows.append(candle(END_TIME - 8 * 60_000, 100.00, 101.20, 99.60, 99.75))
+    # First push down creates the micro swing low.
+    rows.append(candle(END_TIME - 7 * 60_000, 99.75, 99.80, 99.25, 99.38))
+    rows.append(candle(END_TIME - 6 * 60_000, 99.38, 99.50, 99.05, 99.20))
+    rows.append(candle(END_TIME - 5 * 60_000, 99.20, 99.60, 99.15, 99.42))
+    # Confirmed lower-high pivot, then price holds below it.
+    rows.append(candle(END_TIME - 4 * 60_000, 99.42, 99.90, 99.25, 99.70))
+    rows.append(candle(END_TIME - 3 * 60_000, 99.70, 99.85, 99.35, 99.50))
+    rows.append(candle(END_TIME - 2 * 60_000, 99.50, 99.65, 99.40, 99.45))
+    # Closed micro-BOS candle below the swing low.
+    rows.append(candle(END_TIME - 60_000, 99.40, 99.45, 98.80, 98.90))
+    return level, {"1m": rows}, 98.90
 
 
 class CandlePsychologyEntryEngineTests(unittest.TestCase):
@@ -91,7 +111,7 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         self.assertIn("INSIDE_BAR", candle_patterns(inside, 1)["patterns"])
         self.assertIn("OUTSIDE_BAR", candle_patterns(outside, 1)["patterns"])
 
-    def test_support_sweep_reclaim_gives_local_buy_without_htf_data(self):
+    def test_buy_requires_support_rejection_higher_low_and_micro_bos(self):
         level, data, price = bullish_setup()
         original = dict(level)
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
@@ -99,33 +119,56 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         self.assertEqual(result["reason"], "CONFIRMED")
         self.assertEqual(result["approach"], "FROM_ABOVE")
         self.assertIn("LIQUIDITY_SWEEP_RECLAIM_BULLISH", result["patterns"])
+        self.assertIn("MICRO_HIGHER_LOW", result["patterns"])
+        self.assertIn("MICRO_BOS_BULLISH", result["patterns"])
         self.assertGreaterEqual(result["risk_reward"], 2.0)
         self.assertLess(result["stop_loss"], result["entry"])
         self.assertGreater(result["take_profit"], result["entry"])
+        self.assertGreater(result["micro_swing_price"], level["price"])
+        self.assertGreater(result["micro_pullback_price"], 99.3)
         self.assertEqual(level, original)
 
-    def test_resistance_sweep_reclaim_gives_local_sell_without_htf_data(self):
+    def test_sell_requires_resistance_rejection_lower_high_and_micro_bos(self):
         level, data, price = bearish_setup()
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "SELL")
         self.assertEqual(result["reason"], "CONFIRMED")
         self.assertEqual(result["approach"], "FROM_BELOW")
         self.assertIn("LIQUIDITY_SWEEP_RECLAIM_BEARISH", result["patterns"])
+        self.assertIn("MICRO_LOWER_HIGH", result["patterns"])
+        self.assertIn("MICRO_BOS_BEARISH", result["patterns"])
         self.assertGreaterEqual(result["risk_reward"], 2.0)
         self.assertGreater(result["stop_loss"], result["entry"])
         self.assertLess(result["take_profit"], result["entry"])
+        self.assertLess(result["micro_swing_price"], level["price"])
+
+    def test_touch_and_rejection_without_micro_structure_stays_waiting(self):
+        level, data, price = bullish_setup()
+        # Keep only the rejection plus an incomplete first push. A wick alone
+        # is not a BUY plan until a higher-low forms and the micro high breaks.
+        data["1m"] = data["1m"][:13]
+        result = evaluate_level(level, [level], data, 100.82, as_of_ms=END_TIME)
+        self.assertEqual(result["action"], "WAITING")
+        self.assertEqual(result["reason"], "WAITING_FOR_MICRO_STRUCTURE_SHIFT")
+
+    def test_rejection_with_higher_low_but_no_micro_bos_stays_waiting(self):
+        level, data, price = bullish_setup()
+        data["1m"][-1] = candle(END_TIME - 60_000, 100.65, 100.85, 100.60, 100.80)
+        result = evaluate_level(level, [level], data, 100.80, as_of_ms=END_TIME)
+        self.assertEqual(result["action"], "WAITING")
+        self.assertEqual(result["reason"], "WAITING_FOR_MICRO_STRUCTURE_SHIFT")
 
     def test_level_touch_without_rejection_stays_waiting(self):
         level, data, price = bullish_setup()
-        data["1m"][-1] = candle(END_TIME - 60_000, 100.4, 100.55, 99.9, 100.0)
+        data["1m"][8] = candle(END_TIME - 8 * 60_000, 100.1, 100.3, 99.9, 100.05)
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
-        self.assertEqual(result["reason"], "WAITING_FOR_CANDLE_REACTION")
+        self.assertEqual(result["reason"], "WAITING_FOR_LEVEL_REJECTION")
 
-    def test_support_approached_from_below_does_not_give_buy(self):
+    def test_wrong_approach_side_does_not_give_buy(self):
         level, data, _price = bullish_setup()
-        data["1m"][-2] = candle(END_TIME - 120_000, 99.6, 99.7, 99.4, 99.5)
-        data["1m"][-1] = candle(END_TIME - 60_000, 99.5, 100.1, 99.2, 100.05)
+        data["1m"][-6] = candle(END_TIME - 6 * 60_000, 99.55, 99.70, 99.25, 99.40)
+        data["1m"][-5] = candle(END_TIME - 5 * 60_000, 99.70, 100.10, 99.55, 99.95)
         result = evaluate_level(level, [level], data, 100.05, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "APPROACH_SIDE_MISMATCH")
@@ -141,7 +184,7 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
     def test_open_one_minute_candle_is_ignored(self):
         level, data, price = bullish_setup()
         base = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
-        data["1m"].append(candle(END_TIME, 100.5, 110.0, 100.4, 109.0))
+        data["1m"].append(candle(END_TIME, 101.15, 110.0, 101.0, 109.0))
         with_open = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(with_open["action"], base["action"])
         self.assertEqual(with_open["signal_time"], base["signal_time"])
