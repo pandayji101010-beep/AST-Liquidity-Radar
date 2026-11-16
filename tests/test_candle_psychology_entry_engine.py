@@ -124,8 +124,9 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
 
     def test_support_approached_from_below_does_not_give_buy(self):
         level, data, _price = bullish_setup()
-        data["1m"][-1] = candle(END_TIME - 60_000, 99.5, 100.1, 99.2, 99.95)
-        result = evaluate_level(level, [level], data, 99.95, as_of_ms=END_TIME)
+        data["1m"][-2] = candle(END_TIME - 120_000, 99.6, 99.7, 99.4, 99.5)
+        data["1m"][-1] = candle(END_TIME - 60_000, 99.5, 100.1, 99.2, 100.05)
+        result = evaluate_level(level, [level], data, 100.05, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "APPROACH_SIDE_MISMATCH")
 
