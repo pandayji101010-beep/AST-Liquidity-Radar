@@ -340,10 +340,17 @@ def evaluate_level(
             )
             if not is_higher_low:
                 continue
-            prior_push = one[reaction_index + 1:pullback_index]
-            if len(prior_push) < 2:
+            pivot_highs = []
+            for pivot_index in range(reaction_index + 2, pullback_index):
+                pivot_high = _num(one[pivot_index].get("h"))
+                if (
+                    pivot_high > _num(one[pivot_index - 1].get("h"))
+                    and pivot_high >= _num(one[pivot_index + 1].get("h"))
+                ):
+                    pivot_highs.append(pivot_high)
+            if not pivot_highs:
                 continue
-            swing_high = max(_num(item.get("h")) for item in prior_push)
+            swing_high = max(pivot_highs)
             if swing_high <= level_price + micro_buffer:
                 continue
             if any(
@@ -375,10 +382,17 @@ def evaluate_level(
             )
             if not is_lower_high:
                 continue
-            prior_push = one[reaction_index + 1:pullback_index]
-            if len(prior_push) < 2:
+            pivot_lows = []
+            for pivot_index in range(reaction_index + 2, pullback_index):
+                pivot_low = _num(one[pivot_index].get("l"))
+                if (
+                    pivot_low < _num(one[pivot_index - 1].get("l"))
+                    and pivot_low <= _num(one[pivot_index + 1].get("l"))
+                ):
+                    pivot_lows.append(pivot_low)
+            if not pivot_lows:
                 continue
-            swing_low = min(_num(item.get("l")) for item in prior_push)
+            swing_low = min(pivot_lows)
             if swing_low >= level_price - micro_buffer:
                 continue
             if any(
