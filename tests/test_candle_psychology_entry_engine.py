@@ -149,5 +149,66 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         self.assertEqual(len(engine._triggered), 1)
 
 
+    def test_bearish_rejection_shooting_star_and_sell_confirmation(self):
+        level = {
+            "type": "RESISTANCE", "price": 100.0,
+            "zone_low": 99.5, "zone_high": 100.5, "half_width": 0.5,
+        }
+        one_hour = [
+            candle((i + 1) * 3_600_000, 160.08 - i * 0.5, 160.15 - i * 0.5,
+                   159.85 - i * 0.5, 160.0 - i * 0.5)
+            for i in range(60)
+        ]
+        fifteen = [
+            candle((i + 1) * 900_000, 120.08 - i * 0.2, 120.15 - i * 0.2,
+                   119.85 - i * 0.2, 120.0 - i * 0.2)
+            for i in range(60)
+        ]
+        five = [
+            candle(i * 300_000, 100.0, 100.2, 99.8, 100.02)
+            for i in range(39)
+        ]
+        five.append(candle(39 * 300_000, 100.0, 101.2, 99.5, 99.6))
+        one = [
+            candle(i * 60_000, 100.0, 100.2, 99.8, 100.05)
+            for i in range(199)
+        ]
+        one.append(candle(199 * 60_000, 99.8, 100.0, 98.0, 98.3))
+        data = {"1h": one_hour, "15m": fifteen, "5m": five, "1m": one}
+
+        patterns = candle_patterns(five, len(five) - 1, level)["patterns"]
+        self.assertIn("SHOOTING_STAR", patterns)
+        self.assertIn("BEARISH_REJECTION", patterns)
+        self.assertIn("LIQUIDITY_SWEEP_RECLAIM_BEARISH", patterns)
+
+        result = evaluate_level(level, [level], data, 98.3)
+        self.assertEqual(result["action"], "SELL")
+        self.assertEqual(result["reason"], "CONFIRMED")
+        self.assertGreaterEqual(result["risk_reward"], 2.0)
+        self.assertGreater(result["stop_loss"], result["entry"])
+        self.assertLess(result["take_profit"], result["entry"])
+
+    def test_volume_absorption_is_only_tagged_with_reliable_ohlcv_volume(self):
+        level = {
+            "type": "SUPPORT", "price": 100.0,
+            "zone_low": 99.5, "zone_high": 100.5,
+        }
+        rows = [
+            candle((i + 1) * 60_000, 100.0, 100.4, 99.2, 100.3, 100.0)
+            for i in range(14)
+        ]
+        rows.append(candle(15 * 60_000, 100.0, 100.4, 99.2, 100.3, 220.0))
+        result = candle_patterns(rows, len(rows) - 1, level)
+        self.assertTrue(result["volume_reliable"])
+        self.assertIn("REPEATED_BULLISH_REJECTION", result["patterns"])
+        self.assertIn("VOLUME_ABSORPTION_BULLISH_PROXY", result["patterns"])
+
+    def test_price_far_from_level_does_not_activate_reaction_entry(self):
+        level, data, _price = bullish_setup()
+        result = evaluate_level(level, [level], data, 120.0)
+        self.assertEqual(result["action"], "WAITING")
+        self.assertEqual(result["reason"], "PRICE_NOT_NEAR_LEVEL")
+
+
 if __name__ == "__main__":
     unittest.main()
