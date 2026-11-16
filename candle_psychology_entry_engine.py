@@ -453,9 +453,9 @@ def backtest_trades(
     """Evaluate pre-built point-in-time replay steps with the exact live evaluator."""
     engine = CandlePsychologyEntryEngine()
     trades: list[dict[str, Any]] = []
-    for step in candles_by_step:
+    for index, step in enumerate(candles_by_step):
         timestamp = int(step.get("time", 0))
-        levels = levels_by_step.pop(0) if levels_by_step else []
+        levels = levels_by_step[index] if index < len(levels_by_step) else []
         signals = engine.evaluate(levels, step.get("candles", {}), step.get("price"))
         for key, signal in signals.items():
             if signal.get("action") not in ("BUY", "SELL") or int(signal.get("signal_time", -1)) != timestamp:
