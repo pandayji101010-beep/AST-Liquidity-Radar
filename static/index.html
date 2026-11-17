@@ -542,7 +542,7 @@ body{
 .levels-assets{display:grid;gap:14px;margin-top:14px}
 .levels-asset{background:#0a131e;border:1px solid #26384b;border-radius:14px;padding:14px;min-width:0}
 .levels-asset-title{font-size:15px;font-weight:900;letter-spacing:.06em;color:#eef4f9;margin-bottom:12px}
-.levels-head,.levels-row{display:grid;grid-template-columns:54px minmax(110px,1.1fr) minmax(120px,1.4fr) minmax(110px,1.25fr) minmax(100px,1fr) 100px;gap:8px;align-items:center}
+.levels-head,.levels-row{display:grid;grid-template-columns:54px minmax(110px,1.1fr) minmax(120px,1.4fr) minmax(88px,.9fr) minmax(110px,1.25fr) minmax(100px,1fr) 100px;gap:8px;align-items:center}
 .levels-head{padding:0 10px 8px;color:#92a7bb;font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}
 .levels-row{padding:10px;margin-top:6px;border:1px solid #26384b;border-radius:10px;background:#0c1825}
 .levels-cell{min-width:0}
@@ -551,6 +551,7 @@ body{
 .levels-value.support{color:var(--green)}
 .levels-value.resistance{color:var(--red)}
 .levels-value.score{color:#f1d18c}
+.levels-origin-state{font-size:9px;font-weight:800;letter-spacing:.04em;color:#91a4b9;margin-top:3px}.levels-origin-state.first-touch{color:var(--amber)}.levels-origin-state.untested{color:var(--green)}
 .levels-price-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .levels-copy{border:1px solid #38536b;background:#172a3d;color:#cfe4f2;border-radius:6px;padding:4px 7px;font-size:9px;font-weight:850;letter-spacing:.04em;cursor:pointer;white-space:nowrap}
 .levels-copy:hover{border-color:#70c9e3;color:#fff}
@@ -624,11 +625,11 @@ body{
 
   <section class="card full" id="strategySection">
     <div class="head">
-      <div><div class="asset">CONFIRMED MARKET LEVELS</div><div class="sub">1D → 1M timeframe trend · Level entries use local 1M micro-structure</div></div>
+      <div><div class="asset">CONFIRMED MARKET LEVELS</div><div class="sub">Strongest completed 1H → 1Y swing levels · untested / first-touch zones</div></div>
     </div>
     <div id="campaignSignals" class="levels-assets"><div class="empty">Loading confirmed support and resistance levels…</div></div>
   </section>
-  <div class="levels-footer">TIMEFRAME BIAS shows the 1D → 1M trend context. Level BUY / SELL is confirmed separately by the local 1M candle reaction and micro-structure at that level.</div>
+  <div class="levels-footer">Levels come from completed 1H, 4H, 1D, 1W, 1M and 1Y structure. Repeatedly tested or decisively broken zones are filtered out. BUY / SELL still needs a local 1M candle reaction at the level; historical reactions do not guarantee the next reversal.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -719,10 +720,13 @@ function renderAsset(asset){
     const direction=String(level.status||'WAITING').toLowerCase();
     const action=actionLabel(level);
     const distance=number(level.distance,digits)+(level.distance_pct===null||level.distance_pct===undefined?'':' · '+number(level.distance_pct,2)+'%');
+    const tfLabels=(level.source_timeframes||[]).map(tf=>tf==='1mo'?'1M':tf==='1y'?'1Y':tf==='1w'?'1W':String(tf).toUpperCase());
+    const touchState=String(level.touch_state||'UNTESTED').toUpperCase();
     return '<div class="levels-row" data-level-key="'+escapeHtml(uiLevelKey(level))+'">'
       +'<div class="levels-cell"><div class="levels-label">Rank</div><div class="levels-value">'+escapeHtml(level.rank)+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Support / Resistance</div><div class="levels-value '+kind+'">'+(kind==='support'?'SUPPORT':'RESISTANCE')+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Exact Level Price</div><div class="levels-price-line"><div class="levels-value">'+priceText+'</div><button type="button" class="levels-copy" data-price="'+escapeHtml(priceText)+'" aria-label="Copy level price" onclick="copyLevelPrice(this)">COPY</button><span class="levels-entry-action '+action.toLowerCase()+'">'+action+'</span></div></div>'
+      +'<div class="levels-cell"><div class="levels-label">Source TF</div><div class="levels-value">'+escapeHtml(tfLabels.join(' + ')||'—')+'</div><div class="levels-origin-state '+(touchState==='FIRST_TOUCH'?'first-touch':'untested')+'">'+escapeHtml(touchState.replace(/_/g,' '))+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Distance</div><div class="levels-value">'+distance+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Strength Score</div><div class="levels-value score">'+number(level.strength_score,0)+'/100</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Status</div><div class="levels-status '+escapeHtml(direction)+'">'+escapeHtml(level.status||'WAITING')+'</div></div>'
@@ -734,7 +738,7 @@ function renderAsset(asset){
   return '<section class="levels-asset" data-asset="'+escapeHtml(asset.asset)+'">'
     +'<div class="levels-asset-title">'+(asset.asset==='BTC'?'BITCOIN (BTC)':'GOLD (XAUUSD)')+'</div>'
     +renderBiasLine(asset)
-    +'<div class="levels-head"><div>Rank</div><div>Support / Resistance</div><div>Exact Level Price</div><div>Distance</div><div>Strength Score</div><div>Status</div></div>'
+    +'<div class="levels-head"><div>Rank</div><div>Support / Resistance</div><div>Exact Level Price</div><div>Source TF</div><div>Distance</div><div>Strength Score</div><div>Status</div></div>'
     +(rows||'<div class="levels-empty">'+emptyMessage+'</div>')
     +'</section>';
 }
@@ -751,11 +755,11 @@ function updateLevelCells(row,level,asset){
   const cells=row.querySelectorAll('.levels-cell');
   const digits=asset==='BTC'?1:3;
   if(cells[0]) cells[0].querySelector('.levels-value').textContent=String(level.rank??'—');
-  if(cells[3]) cells[3].querySelector('.levels-value').textContent=
+  if(cells[4]) cells[4].querySelector('.levels-value').textContent=
     number(level.distance,digits)+(level.distance_pct===null||level.distance_pct===undefined?'':' · '+number(level.distance_pct,2)+'%');
-  if(cells[4]) cells[4].querySelector('.levels-value').textContent=number(level.strength_score,0)+'/100';
-  if(cells[5]){
-    const status=cells[5].querySelector('.levels-status');
+  if(cells[5]) cells[5].querySelector('.levels-value').textContent=number(level.strength_score,0)+'/100';
+  if(cells[6]){
+    const status=cells[6].querySelector('.levels-status');
     if(status){
       const value=String(level.status||'WAITING');
       const kind=value.toLowerCase();
@@ -771,7 +775,7 @@ function renderLevels(payload){
   const assets=payload?.assets||[];
   assets.forEach(asset=>updateLivePrice(asset.asset,asset.live_reference_price));
   const signature=assets.map(asset=>
-    String(asset.asset)+':'+(Array.isArray(asset.levels)?asset.levels.map(uiLevelKey).join(','):'')
+    String(asset.asset)+':'+(Array.isArray(asset.levels)?asset.levels.map(level=>uiLevelKey(level)+'@'+(level.source_timeframes||[]).join('+')+'@'+(level.touch_state||'')).join(','):'')
   ).join('|')||'empty';
   // Rebuild only when the active level set changes. Polling updates only the
   // small BUY/SELL badge and changing level cells; the dashboard stays in place.
