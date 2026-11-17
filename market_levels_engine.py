@@ -463,6 +463,7 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
             "touch_state": touch_state,
             "last_touch_time": max(int(item["last_touch_time"]) for item in group),
             "first_touch_time": min(first_touch_times) if first_touch_times else None,
+            "origin_time": max(int(item.get("origin_time", 0)) for item in group),
             "departure_atr": round(max_impulse, 2),
             "volume_ratio": round(volume_ratio, 3),
             "origin_kinds": sorted({str(item.get("origin_kind", "SWING")) for item in group}),
@@ -476,8 +477,12 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
 def _decisively_broken(level: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> bool:
     side = level["type"]
     lower, upper = float(level["zone_low"]), float(level["zone_high"])
+    origin_time = int(_number(level.get("origin_time")))
     for timeframe in ("1h", "4h", "1d", "1w", "1mo", "1y"):
-        candles = data.get(timeframe) or []
+        candles = [
+            row for row in (data.get(timeframe) or [])
+            if int(_number(row.get("t"))) >= origin_time
+        ]
         if len(candles) >= 2 and _is_broken_after(candles, 0, side, lower, upper):
             return True
     return False
