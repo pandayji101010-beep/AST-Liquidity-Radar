@@ -3,24 +3,25 @@ from __future__ import annotations
 import math
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-TIMEFRAME_ORDER = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
+TIMEFRAME_ORDER = ("1y", "1mo", "1w", "1d", "4h", "1h", "30m", "15m", "5m", "1m")
 TIMEFRAME_MS = {
-    "1m": 60_000,
-    "5m": 300_000,
-    "15m": 900_000,
-    "30m": 1_800_000,
-    "1h": 3_600_000,
-    "4h": 14_400_000,
-    "1d": 86_400_000,
+    "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
+    "1w": 7 * 86_400_000, "1mo": 31 * 86_400_000, "1y": 366 * 86_400_000,
 }
-ANALYSIS_TFS = ("1d", "4h", "1h", "30m", "15m")
-STRUCTURE_TFS = ("1d", "4h", "1h", "30m", "15m")
-TF_WEIGHT = {"1d": 5.0, "4h": 4.0, "1h": 3.0, "30m": 2.0, "15m": 1.0}
-MAX_LOOKBACK = 900
-MAX_PIVOTS_PER_TF = 140
-MIN_LEVEL_SCORE = 65
+ANALYSIS_TFS = ("1y", "1mo", "1w", "1d", "4h", "1h")
+STRUCTURE_TFS = ANALYSIS_TFS
+TF_WEIGHT = {"1h": 3.0, "4h": 4.0, "1d": 5.0, "1w": 6.0, "1mo": 7.0, "1y": 8.0}
+TIMEFRAME_LOOKBACK = {
+    "1m": 900, "5m": 900, "15m": 900, "30m": 900,
+    "1h": 3_000, "4h": 2_000, "1d": 5_000, "1w": 520, "1mo": 240, "1y": 30,
+}
+MAX_LOOKBACK = 5_000
+MAX_PIVOTS_PER_TF = 120
+MIN_LEVEL_SCORE = 58
 MIN_REACTION_RATE = 0.60
 MIN_RR = 2.0
 
@@ -31,6 +32,21 @@ def _number(value: Any, default: float = 0.0) -> float:
         return result if math.isfinite(result) else default
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _calendar_close_ms(stamp_ms: int, timeframe: str) -> int:
+    """Return the exact UTC close timestamp for calendar-sized candles."""
+    dt = datetime.fromtimestamp(stamp_ms / 1000.0, tz=timezone.utc)
+    if timeframe == "1w":
+        end = dt + timedelta(days=7)
+    elif timeframe == "1mo":
+        year, month = dt.year, dt.month
+        end = datetime(year + (month == 12), 1 if month == 12 else month + 1, 1, tzinfo=timezone.utc)
+    elif timeframe == "1y":
+        end = datetime(dt.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = dt + timedelta(milliseconds=TIMEFRAME_MS[timeframe])
+    return int(end.timestamp() * 1000)
 
 
 def _clean_candles(rows: Any, timeframe: str, now: int) -> list[dict[str, float | int]]:
@@ -47,19 +63,55 @@ def _clean_candles(rows: Any, timeframe: str, now: int) -> list[dict[str, float 
                 stamp *= 1000
             op, high, low, close = (_number(row.get(key), float("nan")) for key in ("o", "h", "l", "c"))
             volume = max(0.0, _number(row.get("v")))
-            if stamp <= 0 or stamp + interval > now:
+            close_time = _calendar_close_ms(stamp, timeframe) if timeframe in ("1w", "1mo", "1y") else stamp + interval
+            if stamp <= 0 or close_time > now:
                 continue
             if any(not math.isfinite(x) for x in (op, high, low, close)):
                 continue
             if low <= 0 or high < max(op, close, low) or low > min(op, close, high):
                 continue
-            cleaned[stamp] = {
-                "t": stamp, "o": op, "h": high, "l": low, "c": close, "v": volume,
-            }
-        except (TypeError, ValueError, AttributeError):
+            cleaned[stamp] = {"t": stamp, "o": op, "h": high, "l": low, "c": close, "v": volume}
+        except (TypeError, ValueError, AttributeError, OverflowError):
             continue
-    return [cleaned[key] for key in sorted(cleaned)][-MAX_LOOKBACK:]
+    limit = TIMEFRAME_LOOKBACK.get(timeframe, MAX_LOOKBACK)
+    return [cleaned[key] for key in sorted(cleaned)][-limit:]
 
+
+def _resample_calendar_timeframes(daily: list[dict[str, Any]], now_ms: int) -> dict[str, list[dict[str, Any]]]:
+    """Build only completed UTC weekly, monthly and yearly OHLCV bars from closed daily candles."""
+    grouped: dict[str, dict[int, list[dict[str, Any]]]] = {
+        "1w": defaultdict(list), "1mo": defaultdict(list), "1y": defaultdict(list),
+    }
+    for candle in daily:
+        dt = datetime.fromtimestamp(int(candle["t"]) / 1000.0, tz=timezone.utc)
+        week_start = dt - timedelta(days=dt.weekday())
+        month_start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        year_start = dt.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        grouped["1w"][int(week_start.timestamp() * 1000)].append(candle)
+        grouped["1mo"][int(month_start.timestamp() * 1000)].append(candle)
+        grouped["1y"][int(year_start.timestamp() * 1000)].append(candle)
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for timeframe, buckets in grouped.items():
+        bars: list[dict[str, Any]] = []
+        for start_ms, items in sorted(buckets.items()):
+            if _calendar_close_ms(start_ms, timeframe) > now_ms:
+                continue
+            end_ms = _calendar_close_ms(start_ms, timeframe)
+            expected_days = max(1, int((end_ms - start_ms) // 86_400_000))
+            # Reject a partially covered archive/listing period rather than fabricating a full candle.
+            if len(items) < max(1, int(expected_days * 0.75)):
+                continue
+            items = sorted(items, key=lambda row: int(row["t"]))
+            bars.append({
+                "t": start_ms, "o": float(items[0]["o"]),
+                "h": max(float(row["h"]) for row in items),
+                "l": min(float(row["l"]) for row in items),
+                "c": float(items[-1]["c"]),
+                "v": sum(float(row.get("v") or 0.0) for row in items),
+            })
+        result[timeframe] = bars[-TIMEFRAME_LOOKBACK[timeframe]:]
+    return result
 
 def _atr(candles: list[dict[str, Any]], end: int | None = None, period: int = 14) -> float:
     if len(candles) < 2:
@@ -164,54 +216,193 @@ def _volume_ratio(candles: list[dict[str, Any]], index: int) -> float:
     return current / average if average > 0 else 1.0
 
 
+def _rejection_quality(candle: dict[str, Any], side: str) -> float:
+    op, high, low, close = (_number(candle.get(key)) for key in ("o", "h", "l", "c"))
+    span = max(high - low, 1e-12)
+    wick = min(op, close) - low if side == "SUPPORT" else high - max(op, close)
+    close_position = (close - low) / span
+    aligned = close_position >= 0.52 if side == "SUPPORT" else close_position <= 0.48
+    return max(0.0, wick / span) if aligned else 0.0
+
+
+def _return_events(candles: list[dict[str, Any]], start_index: int, level: float, half_width: float) -> list[int]:
+    """Count distinct returns after price has departed from a level."""
+    events: list[int] = []
+    in_touch = False
+    for index in range(max(0, start_index), len(candles)):
+        row = candles[index]
+        intersects = _number(row.get("l")) <= level + half_width and _number(row.get("h")) >= level - half_width
+        if intersects and not in_touch:
+            events.append(index)
+        in_touch = intersects
+    return events
+
+
+def _is_broken_after(candles: list[dict[str, Any]], start_index: int, side: str, lower: float, upper: float) -> bool:
+    streak = 0
+    for row in candles[max(0, start_index):]:
+        close = _number(row.get("c"))
+        broken = close < lower if side == "SUPPORT" else close > upper
+        streak = streak + 1 if broken else 0
+        if streak >= 2:
+            return True
+    return False
+
+
+def _pivot_candidate(
+    candles: list[dict[str, Any]], timeframe: str, index: int,
+    side: str, price: float, liquidity_pool: bool = False,
+) -> dict[str, Any] | None:
+    """Keep strong HTF pivots that are untested or in their current first retest."""
+    atr = _atr(candles, index)
+    if atr <= 0 or price <= 0 or index >= len(candles) - 2:
+        return None
+    half_width = max(price * 0.00012, min(atr * 0.16, price * 0.0035))
+    lookahead = {"1h": 18, "4h": 12, "1d": 8, "1w": 6, "1mo": 5, "1y": 4}.get(timeframe, 8)
+    future = candles[index + 1:min(len(candles), index + lookahead + 1)]
+    if not future:
+        return None
+    excursions = [
+        _number(row.get("h")) - price if side == "SUPPORT" else price - _number(row.get("l"))
+        for row in future
+    ]
+    impulse_atr = max(excursions, default=0.0) / atr
+    if impulse_atr < 1.0:
+        return None
+
+    departure_threshold = max(atr * 0.95, half_width * 3.0)
+    departure_index = next(
+        (offset for offset, excursion in enumerate(excursions, start=index + 1) if excursion >= departure_threshold),
+        None,
+    )
+    if departure_index is None:
+        return None
+
+    lower, upper = price - half_width, price + half_width
+    events = _return_events(candles, departure_index + 1, price, half_width)
+    if len(events) > 1:
+        return None
+    pending_age = {"1h": 4, "4h": 3, "1d": 2, "1w": 1, "1mo": 1, "1y": 1}.get(timeframe, 2)
+    touch_age = len(candles) - 1 - events[0] if events else 0
+    if events and touch_age > pending_age:
+        return None
+    if _is_broken_after(candles, departure_index, side, lower, upper):
+        return None
+
+    origin = candles[index]
+    wick_ratio = _rejection_quality(origin, side)
+    freshness_span = {"1h": 1_500, "4h": 900, "1d": 900, "1w": 208, "1mo": 96, "1y": 10}.get(timeframe, 180)
+    age = max(0, len(candles) - 1 - index)
+    freshness = max(0.0, 1.0 - age / freshness_span)
+    if freshness < 0.05:
+        return None
+    return {
+        "side": side, "price": price, "half_width": half_width, "timeframe": timeframe,
+        "touches": 1 if events else 0, "reactions": 0,
+        "touch_state": "FIRST_TOUCH" if events else "UNTESTED",
+        "first_touch_time": int(candles[events[0]]["t"]) if events else None,
+        "last_touch_time": int(candles[events[0]]["t"]) if events else int(origin["t"]),
+        "freshness": freshness, "impulse_atr": impulse_atr, "wick_ratio": wick_ratio,
+        "volume_ratio": _volume_ratio(candles, index), "liquidity_pool": liquidity_pool,
+        "origin_time": int(origin["t"]), "origin_kind": "SWING",
+    }
+
+
+def _period_extreme_candidates(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Add completed week/month/year highs and lows when the origin candle shows rejection."""
+    candidates: list[dict[str, Any]] = []
+    daily = data.get("1d") or []
+    if len(daily) < 20:
+        return candidates
+    for timeframe, max_periods in (("1w", 20), ("1mo", 24), ("1y", 10)):
+        periods = data.get(timeframe) or []
+        if len(periods) < 2:
+            continue
+        daily_atr = _atr(daily)
+        fallback = daily_atr * {"1w": 4.5, "1mo": 18.0, "1y": 180.0}[timeframe]
+        for index in range(max(0, len(periods) - max_periods), len(periods)):
+            candle = periods[index]
+            atr = _atr(periods, index) or fallback
+            if atr <= 0:
+                continue
+            op, high, low, close = (_number(candle.get(key)) for key in ("o", "h", "l", "c"))
+            span = max(high - low, 1e-12)
+            upper_wick, lower_wick = high - max(op, close), min(op, close) - low
+            close_position = (close - low) / span
+            period_close = _calendar_close_ms(int(candle["t"]), timeframe)
+            first_daily = next((i for i, row in enumerate(daily) if int(row["t"]) >= period_close), len(daily))
+            for side, price, wick, reversal_distance in (
+                ("RESISTANCE", high, upper_wick, high - close),
+                ("SUPPORT", low, lower_wick, close - low),
+            ):
+                wick_ratio = wick / span
+                if wick_ratio < 0.18 and reversal_distance < atr * 0.35:
+                    continue
+                if side == "RESISTANCE" and close_position > 0.52:
+                    continue
+                if side == "SUPPORT" and close_position < 0.48:
+                    continue
+                half_width = max(price * 0.00012, min(atr * 0.10, price * 0.0035))
+                lower, upper = price - half_width, price + half_width
+                events = _return_events(daily, first_daily, price, half_width)
+                if len(events) > 1:
+                    continue
+                touch_age = len(daily) - 1 - events[0] if events else 0
+                if events and touch_age > 5:
+                    continue
+                if _is_broken_after(daily, first_daily, side, lower, upper):
+                    continue
+                period_age = max(0, len(periods) - 1 - index)
+                freshness = max(0.0, 1.0 - period_age / {"1w": 156, "1mo": 72, "1y": 10}[timeframe])
+                if freshness < 0.05:
+                    continue
+                candidates.append({
+                    "side": side, "price": price, "half_width": half_width, "timeframe": timeframe,
+                    "touches": 1 if events else 0, "reactions": 0,
+                    "touch_state": "FIRST_TOUCH" if events else "UNTESTED",
+                    "first_touch_time": int(daily[events[0]]["t"]) if events else None,
+                    "last_touch_time": int(daily[events[0]]["t"]) if events else int(candle["t"]),
+                    "freshness": freshness, "impulse_atr": max(0.35, reversal_distance / atr),
+                    "wick_ratio": wick_ratio, "volume_ratio": _volume_ratio(periods, index),
+                    "liquidity_pool": False, "origin_time": int(candle["t"]),
+                    "origin_kind": "PERIOD_EXTREME", "period_age": period_age,
+                })
+    return candidates
+
+
 def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    max_age = {"1d": 100, "4h": 150, "1h": 180, "30m": 220, "15m": 260}
+    minimum_bars = {"1h": 48, "4h": 32, "1d": 32, "1w": 12, "1mo": 8, "1y": 5}
     for timeframe in ANALYSIS_TFS:
         candles = data.get(timeframe) or []
-        if len(candles) < 32:
+        if len(candles) < minimum_bars[timeframe]:
             continue
         pivot_highs, pivot_lows = _confirmed_pivots(candles)
         pivots = [("RESISTANCE", index, price) for index, price in pivot_highs]
         pivots.extend(("SUPPORT", index, price) for index, price in pivot_lows)
         pivots.sort(key=lambda item: item[1])
         for side, index, price in pivots[-MAX_PIVOTS_PER_TF:]:
-            atr_at_pivot = _atr(candles, index)
-            if atr_at_pivot <= 0 or price <= 0:
+            atr = _atr(candles, index)
+            if atr <= 0:
                 continue
-            half_width = max(price * 0.00008, min(atr_at_pivot * 0.14, price * 0.0010))
-            same_side_pivots = pivot_highs if side == "RESISTANCE" else pivot_lows
-            liquidity_tolerance = max(atr_at_pivot * 0.20, half_width * 1.5)
-            liquidity_pool = any(
-                other_index != index and abs(float(other_price) - price) <= liquidity_tolerance
-                for other_index, other_price in same_side_pivots[-120:]
-            )
-            stats = _reaction_stats(candles, index, price, half_width, atr_at_pivot, side)
-            if stats["touches"] < 1 or stats["reactions"] < 1 or stats["broken"]:
-                continue
-            age = max(0, len(candles) - 1 - int(stats["last_touch_index"]))
-            freshness = max(0.0, 1.0 - age / max_age[timeframe])
-            if freshness < 0.03:
-                continue
-            candidates.append({
-                "side": side,
-                "price": price,
-                "half_width": half_width,
-                "timeframe": timeframe,
-                "touches": int(stats["touches"]),
-                "reactions": int(stats["reactions"]),
-                "freshness": freshness,
-                "volume_ratio": _volume_ratio(candles, index),
-                "liquidity_pool": liquidity_pool,
-                "last_touch_time": int(candles[int(stats["last_touch_index"])]["t"]),
-            })
+            same_side = pivot_highs if side == "RESISTANCE" else pivot_lows
+            tolerance = max(atr * 0.25, price * 0.0002)
+            liquidity_pool = sum(
+                1 for other_index, other_price in same_side[-120:]
+                if other_index != index and abs(float(other_price) - price) <= tolerance
+            ) >= 1
+            candidate = _pivot_candidate(candles, timeframe, index, side, float(price), liquidity_pool)
+            if candidate is not None:
+                candidates.append(candidate)
+    candidates.extend(_period_extreme_candidates(data))
     return candidates
 
 
 def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Cluster aligned HTF levels and rank them by timeframe, displacement and freshness."""
     groups: list[list[dict[str, Any]]] = []
     for candidate in sorted(candidates, key=lambda item: (item["side"], item["price"])):
-        match: list[dict[str, Any]] | None = None
+        match = None
         for group in reversed(groups):
             if group[0]["side"] != candidate["side"]:
                 continue
@@ -229,48 +420,52 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
     for group in groups:
         weighted = []
         for item in group:
-            weight = TF_WEIGHT[item["timeframe"]] * (1.0 + min(item["reactions"], 3) * 0.25) * (0.5 + item["freshness"])
-            weighted.append((float(item["price"]), weight))
+            tf_weight = TF_WEIGHT.get(str(item["timeframe"]), 2.0)
+            weight = tf_weight * (1.0 + min(float(item.get("impulse_atr", 0.0)), 3.0) * 0.15)
+            weighted.append((float(item["price"]), weight * (0.7 + float(item.get("freshness", 0.0)))))
         total_weight = sum(weight for _, weight in weighted)
         price = sum(value * weight for value, weight in weighted) / total_weight if total_weight else float(group[0]["price"])
         half_width = max(float(item["half_width"]) + abs(float(item["price"]) - price) for item in group)
-        half_width = min(half_width, price * 0.0018)
-        touches = sum(int(item["touches"]) for item in group)
-        reactions = sum(int(item["reactions"]) for item in group)
-        probability = reactions / touches if touches else 0.0
+        half_width = min(half_width, price * 0.0040)
         source_tfs = sorted({str(item["timeframe"]) for item in group}, key=lambda tf: TIMEFRAME_ORDER.index(tf))
-        freshness = max(float(item["freshness"]) for item in group)
-        volume_ratio = sum(float(item["volume_ratio"]) for item in group) / len(group)
-        if touches >= 12 or (touches >= 8 and probability < 0.65):
+        max_tf_weight = max(TF_WEIGHT.get(tf, 2.0) for tf in source_tfs)
+        max_impulse = max(float(item.get("impulse_atr", 0.0)) for item in group)
+        max_wick = max(float(item.get("wick_ratio", 0.0)) for item in group)
+        volume_ratio = sum(float(item.get("volume_ratio", 1.0)) for item in group) / len(group)
+        freshness = max(float(item.get("freshness", 0.0)) for item in group)
+        liquidity = any(bool(item.get("liquidity_pool")) for item in group)
+        touches = max(int(item.get("touches", 0)) for item in group)
+        touch_state = "FIRST_TOUCH" if touches else "UNTESTED"
+
+        score = (
+            25.0 + (max_tf_weight - 3.0) * 3.0
+            + min(max(len(source_tfs) - 1, 0) * 7.0, 21.0)
+            + 20.0 * min(max_impulse / 2.5, 1.0)
+            + 10.0 * min(max_wick / 0.45, 1.0)
+            + 5.0 * min(max(volume_ratio - 1.0, 0.0) / 1.5, 1.0)
+            + (5.0 if liquidity else 0.0)
+            + 8.0 * freshness
+            + (6.0 if touches == 0 else 3.0)
+        )
+        score = max(0.0, min(100.0, score))
+        if score < MIN_LEVEL_SCORE or max_impulse < 1.0:
             continue
-        liquidity_evidence = any(bool(item.get("liquidity_pool")) for item in group)
-        reaction_score = 31.0 * probability
-        touch_score = 16.0 * min(touches / 4.0, 1.0)
-        confluence_score = 20.0 * min(len(source_tfs) / 3.0, 1.0)
-        freshness_score = 15.0 * freshness
-        volume_score = 10.0 * min(max(volume_ratio - 0.8, 0.0) / 1.2, 1.0)
-        liquidity_score = 8.0 if liquidity_evidence else 0.0
-        consumption_penalty = min(max(touches - 5, 0) * 4.0, 16.0)
-        score = max(0.0, min(100.0, reaction_score + touch_score + confluence_score + freshness_score + volume_score + liquidity_score - consumption_penalty))
-        if touches < 2 or reactions < 1 or probability < MIN_REACTION_RATE or score < MIN_LEVEL_SCORE:
-            continue
-        if len(source_tfs) < 2 and reactions < 3:
-            continue
+
+        first_touch_times = [int(item["first_touch_time"]) for item in group if item.get("first_touch_time") is not None]
         level = {
-            "type": group[0]["side"],
-            "price": price,
-            "zone_low": price - half_width,
-            "zone_high": price + half_width,
-            "half_width": half_width,
-            "strength_score": int(round(score)),
-            "reaction_probability": round(probability * 100.0, 2),
-            "historical_touches": touches,
-            "historical_reactions": reactions,
-            "source_timeframes": source_tfs,
-            "timeframe_confluence": len(source_tfs),
-            "freshness": round(freshness, 3),
+            "type": group[0]["side"], "price": price,
+            "zone_low": price - half_width, "zone_high": price + half_width,
+            "half_width": half_width, "strength_score": int(round(score)),
+            "reaction_probability": None,
+            "historical_touches": touches, "historical_reactions": 0,
+            "source_timeframes": source_tfs, "origin_timeframe": source_tfs[0],
+            "timeframe_confluence": len(source_tfs), "freshness": round(freshness, 3),
+            "touch_state": touch_state,
             "last_touch_time": max(int(item["last_touch_time"]) for item in group),
+            "first_touch_time": min(first_touch_times) if first_touch_times else None,
+            "departure_atr": round(max_impulse, 2),
             "volume_ratio": round(volume_ratio, 3),
+            "origin_kinds": sorted({str(item.get("origin_kind", "SWING")) for item in group}),
         }
         if _decisively_broken(level, data):
             continue
@@ -281,17 +476,11 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
 def _decisively_broken(level: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> bool:
     side = level["type"]
     lower, upper = float(level["zone_low"]), float(level["zone_high"])
-    for timeframe in ("1d", "4h", "1h", "30m", "15m"):
+    for timeframe in ("1h", "4h", "1d", "1w", "1mo", "1y"):
         candles = data.get(timeframe) or []
-        if len(candles) < 2:
-            continue
-        last_two = candles[-2:]
-        if side == "SUPPORT" and all(float(row["c"]) < lower for row in last_two):
-            return True
-        if side == "RESISTANCE" and all(float(row["c"]) > upper for row in last_two):
+        if len(candles) >= 2 and _is_broken_after(candles, 0, side, lower, upper):
             return True
     return False
-
 
 def _structure_bias(candles: list[dict[str, Any]]) -> str:
     if len(candles) < 25:
@@ -506,7 +695,7 @@ def _entry_confirmation(
 
 
 class HighConfidenceMarketLevelsEngine:
-    """Historical-reaction and multi-timeframe structure based support/resistance engine."""
+    """Strong 1H–1Y swing and period-extreme levels, prioritising first unmitigated retests."""
 
     def __init__(self, asset: str = "MARKET") -> None:
         self.asset = asset.upper()
@@ -536,8 +725,11 @@ class HighConfidenceMarketLevelsEngine:
         now = int(time.time() * 1000)
         data = {
             timeframe: _clean_candles(candles_by_tf.get(timeframe, []), timeframe, now)
-            for timeframe in TIMEFRAME_ORDER
+            for timeframe in TIMEFRAME_ORDER if timeframe not in ("1w", "1mo", "1y")
         }
+        data.update(_resample_calendar_timeframes(data.get("1d") or [], now))
+        for timeframe in ("1w", "1mo", "1y"):
+            data[timeframe] = _clean_candles(data.get(timeframe, []), timeframe, now)
         signature = self._data_signature(data)
         if self._signature != signature:
             self._refresh_levels(data)
@@ -560,11 +752,12 @@ class HighConfidenceMarketLevelsEngine:
                 item for item in self._levels_cache
                 if item["type"] == "RESISTANCE" and float(item["price"]) >= price - float(item["half_width"])
             ]
+            # Select the strongest major levels first; show selected levels nearest-first.
             visible_supports = sorted(
-                supports, key=lambda item: (abs(price - float(item["price"])), -int(item["strength_score"]))
+                supports, key=lambda item: (-int(item["strength_score"]), abs(price - float(item["price"])))
             )[:3]
             visible_resistances = sorted(
-                resistances, key=lambda item: (abs(price - float(item["price"])), -int(item["strength_score"]))
+                resistances, key=lambda item: (-int(item["strength_score"]), abs(price - float(item["price"])))
             )[:3]
             chosen = visible_supports + visible_resistances
             htf_bias, structure = self._bias_cache
@@ -596,6 +789,10 @@ class HighConfidenceMarketLevelsEngine:
                     "historical_reactions": level["historical_reactions"],
                     "timeframe_confluence": level["timeframe_confluence"],
                     "source_timeframes": level["source_timeframes"],
+                    "origin_timeframe": level["origin_timeframe"],
+                    "touch_state": level["touch_state"],
+                    "departure_atr": level["departure_atr"],
+                    "first_touch_time": level["first_touch_time"],
                     "signal_time": signal_time,
                 })
             display.sort(key=lambda item: (item["distance"], -item["strength_score"]))
@@ -608,7 +805,14 @@ class HighConfidenceMarketLevelsEngine:
             for timeframe in TIMEFRAME_ORDER
         }
         available = sum(len(data.get(tf) or []) for tf in ANALYSIS_TFS)
-        ready = all(len(data.get(tf) or []) >= 32 for tf in ("1d", "4h", "1h", "30m", "15m"))
+        # New listings may not yet have a completed annual candle; monthly history is sufficient to scan.
+        ready = (
+            len(data.get("1h") or []) >= 32
+            and len(data.get("4h") or []) >= 32
+            and len(data.get("1d") or []) >= 25
+            and len(data.get("1w") or []) >= 8
+            and len(data.get("1mo") or []) >= 3
+        )
         status = "READY" if levels else "NO TRADE" if ready else "WARMING UP"
         return {
             "asset": self.asset,
