@@ -30,7 +30,7 @@ def _rows(data: dict[str, Any], timeframe: str) -> list[dict[str, Any]]:
 
 
 def _closed_rows(data: dict[str, Any], timeframe: str, as_of_ms: int) -> list[dict[str, Any]]:
-    """Exclude every candle whose scheduled close is later than the decision time."""
+    """Use only candles that have fully closed by the decision timestamp."""
     interval = TIMEFRAME_MS[timeframe]
     return [
         row for row in _rows(data, timeframe)
@@ -42,9 +42,8 @@ def _closed_rows(data: dict[str, Any], timeframe: str, as_of_ms: int) -> list[di
 def _atr(candles: list[dict[str, Any]], period: int = 14) -> float:
     if len(candles) < 2:
         return 0.0
-    start = max(1, len(candles) - period)
     ranges = []
-    for index in range(start, len(candles)):
+    for index in range(max(1, len(candles) - period), len(candles)):
         row = candles[index]
         previous_close = _num(candles[index - 1].get("c"))
         ranges.append(max(
@@ -53,47 +52,6 @@ def _atr(candles: list[dict[str, Any]], period: int = 14) -> float:
             abs(_num(row.get("l")) - previous_close),
         ))
     return sum(ranges) / len(ranges) if ranges else 0.0
-
-
-def _ema(values: list[float], period: int) -> float:
-    if not values:
-        return 0.0
-    alpha = 2.0 / (period + 1.0)
-    result = values[0]
-    for value in values[1:]:
-        result = alpha * value + (1.0 - alpha) * result
-    return result
-
-
-def _market_bias(candles: list[dict[str, Any]]) -> str:
-    """Closed-candle structure with an EMA fallback when pivots are sparse."""
-    if len(candles) < 30:
-        return "NEUTRAL"
-    highs = [_num(row.get("h")) for row in candles[-120:]]
-    lows = [_num(row.get("l")) for row in candles[-120:]]
-    pivot_highs: list[float] = []
-    pivot_lows: list[float] = []
-    for index in range(2, len(highs) - 2):
-        high_window = highs[index - 2:index + 3]
-        low_window = lows[index - 2:index + 3]
-        if highs[index] == max(high_window) and highs[index] > highs[index - 1]:
-            pivot_highs.append(highs[index])
-        if lows[index] == min(low_window) and lows[index] < lows[index - 1]:
-            pivot_lows.append(lows[index])
-    if len(pivot_highs) >= 2 and len(pivot_lows) >= 2:
-        if pivot_highs[-1] > pivot_highs[-2] and pivot_lows[-1] > pivot_lows[-2]:
-            return "BULLISH"
-        if pivot_highs[-1] < pivot_highs[-2] and pivot_lows[-1] < pivot_lows[-2]:
-            return "BEARISH"
-    closes = [_num(row.get("c")) for row in candles[-120:]]
-    ema20 = _ema(closes, 20)
-    ema50 = _ema(closes, 50)
-    prior_ema20 = _ema(closes[:-5], 20)
-    if closes[-1] > ema20 > ema50 and ema20 > prior_ema20:
-        return "BULLISH"
-    if closes[-1] < ema20 < ema50 and ema20 < prior_ema20:
-        return "BEARISH"
-    return "NEUTRAL"
 
 
 def candle_metrics(candle: dict[str, Any], atr: float = 0.0) -> dict[str, float]:
@@ -120,35 +78,34 @@ def candle_patterns(
     index: int,
     level: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Describe candle psychology using only this candle and already-closed predecessors."""
+    """Read local candle psychology and level-specific rejection from closed candles."""
     if index < 0 or index >= len(candles):
         return {"patterns": [], "metrics": {}, "volume_reliable": False}
-    candle = candles[index]
-    op, high, low, close = (_num(candle.get(key)) for key in ("o", "h", "l", "c"))
+
+    row = candles[index]
+    op, high, low, close = (_num(row.get(key)) for key in ("o", "h", "l", "c"))
     atr = _atr(candles[max(0, index - 14):index + 1])
-    metrics = candle_metrics(candle, atr)
-    body = metrics["body"]
-    upper = metrics["upper_wick"]
-    lower = metrics["lower_wick"]
-    span = metrics["range"]
+    metrics = candle_metrics(row, atr)
+    body, upper, lower, span = (
+        metrics["body"], metrics["upper_wick"], metrics["lower_wick"], metrics["range"]
+    )
     close_pos = metrics["close_position"]
-    bullish = close > op
-    bearish = close < op
+    bullish, bearish = close > op, close < op
     patterns: list[str] = []
 
-    bull_rejection = bullish and lower >= max(body * 1.0, span * 0.32) and close_pos >= 0.62
-    bear_rejection = bearish and upper >= max(body * 1.0, span * 0.32) and close_pos <= 0.38
+    bull_rejection = bullish and lower >= max(body * 1.0, span * 0.32) and close_pos >= 0.58
+    bear_rejection = bearish and upper >= max(body * 1.0, span * 0.32) and close_pos <= 0.42
     if bull_rejection:
         patterns.extend(["BULLISH_REJECTION", "LONG_LOWER_WICK_REJECTION"])
     if bear_rejection:
         patterns.extend(["BEARISH_REJECTION", "LONG_UPPER_WICK_REJECTION"])
-    if lower >= max(body * 2.0, span * 0.50) and upper <= span * 0.25 and close_pos >= 0.62:
+    if lower >= max(body * 2.0, span * 0.50) and upper <= span * 0.25 and close_pos >= 0.58:
         patterns.append("HAMMER")
-        if close_pos >= 0.72:
+        if close_pos >= 0.70:
             patterns.append("PIN_BAR_BULLISH")
-    if upper >= max(body * 2.0, span * 0.50) and lower <= span * 0.25 and close_pos <= 0.38:
+    if upper >= max(body * 2.0, span * 0.50) and lower <= span * 0.25 and close_pos <= 0.42:
         patterns.append("SHOOTING_STAR")
-        if close_pos <= 0.28:
+        if close_pos <= 0.30:
             patterns.append("PIN_BAR_BEARISH")
 
     if index > 0:
@@ -164,23 +121,26 @@ def candle_patterns(
         if high >= prev_high and low <= prev_low and (high > prev_high or low < prev_low):
             patterns.append("OUTSIDE_BAR")
 
-    if metrics["body_pct"] >= 65.0 and metrics["relative_strength"] >= 0.70:
-        if bullish and close_pos >= 0.75:
+    if metrics["body_pct"] >= 60.0 and metrics["relative_strength"] >= 0.55:
+        if bullish and close_pos >= 0.72:
             patterns.append("STRONG_BODY_BULLISH")
-        elif bearish and close_pos <= 0.25:
+        elif bearish and close_pos <= 0.28:
             patterns.append("STRONG_BODY_BEARISH")
 
+    volume_reliable = False
     if level is not None:
         level_price = _num(level.get("price"))
         zone_low = _num(level.get("zone_low"), level_price)
         zone_high = _num(level.get("zone_high"), level_price)
         touched = low <= zone_high and high >= zone_low
+
         if index > 0:
             previous_close = _num(candles[index - 1].get("c"))
             if level.get("type") == "SUPPORT" and previous_close < zone_low and close > level_price:
                 patterns.append("FAILED_BREAKOUT_BULLISH")
             elif level.get("type") == "RESISTANCE" and previous_close > zone_high and close < level_price:
                 patterns.append("FAILED_BREAKOUT_BEARISH")
+
         if level.get("type") == "SUPPORT" and low < zone_low and close > level_price:
             patterns.append("LIQUIDITY_SWEEP_RECLAIM_BULLISH")
         elif level.get("type") == "RESISTANCE" and high > zone_high and close < level_price:
@@ -188,15 +148,15 @@ def candle_patterns(
 
         recent = candles[max(0, index - 4):index + 1]
         rejection_count = 0
-        for row in recent:
-            row_low, row_high = _num(row.get("l")), _num(row.get("h"))
-            if row_low > zone_high or row_high < zone_low:
+        for prior in recent:
+            prior_low, prior_high = _num(prior.get("l")), _num(prior.get("h"))
+            if prior_low > zone_high or prior_high < zone_low:
                 continue
-            row_metrics = candle_metrics(row, atr)
+            prior_metrics = candle_metrics(prior, atr)
             if level.get("type") == "SUPPORT":
-                rejected = row_metrics["lower_wick_pct"] >= 32 and row_metrics["close_position"] >= 0.60
+                rejected = prior_metrics["lower_wick_pct"] >= 30 and prior_metrics["close_position"] >= 0.58
             else:
-                rejected = row_metrics["upper_wick_pct"] >= 32 and row_metrics["close_position"] <= 0.40
+                rejected = prior_metrics["upper_wick_pct"] >= 30 and prior_metrics["close_position"] <= 0.42
             rejection_count += int(rejected)
         if rejection_count >= 2:
             patterns.append(
@@ -204,24 +164,25 @@ def candle_patterns(
                 else "REPEATED_BEARISH_REJECTION"
             )
 
-        prior_volumes = [_num(row.get("v")) for row in candles[max(0, index - 20):index]]
-        prior_volumes = [value for value in prior_volumes if value > 0]
-        current_volume = _num(candle.get("v"))
+        prior_volumes = [
+            _num(prior.get("v"))
+            for prior in candles[max(0, index - 20):index]
+            if _num(prior.get("v")) > 0
+        ]
+        current_volume = _num(row.get("v"))
         volume_reliable = current_volume > 0 and len(prior_volumes) >= 10
-        volume_ratio = current_volume / (sum(prior_volumes) / len(prior_volumes)) if volume_reliable else 0.0
-        if touched and volume_reliable and volume_ratio >= 1.4 and rejection_count >= 2:
+        volume_ratio = (
+            current_volume / (sum(prior_volumes) / len(prior_volumes))
+            if volume_reliable else 0.0
+        )
+        if touched and volume_reliable and volume_ratio >= 1.5 and rejection_count >= 2:
             patterns.append(
                 "VOLUME_ABSORPTION_BULLISH_PROXY" if level.get("type") == "SUPPORT"
                 else "VOLUME_ABSORPTION_BEARISH_PROXY"
             )
         metrics["volume_ratio"] = volume_ratio
-    else:
-        volume_reliable = False
-    return {
-        "patterns": patterns,
-        "metrics": metrics,
-        "volume_reliable": volume_reliable,
-    }
+
+    return {"patterns": patterns, "metrics": metrics, "volume_reliable": volume_reliable}
 
 
 _BULLISH_REACTIONS = {
@@ -242,64 +203,37 @@ def level_key(level: dict[str, Any]) -> str:
     return f"{str(level.get('type', '')).upper()}:{_num(level.get('price')):.8f}"
 
 
-def _broken_before_entry(
-    side: str,
-    level: dict[str, Any],
-    five_minute: list[dict[str, Any]],
-    one_minute: list[dict[str, Any]],
-    atr1: float,
-) -> bool:
-    lower = _num(level.get("zone_low"), _num(level.get("price")))
-    upper = _num(level.get("zone_high"), _num(level.get("price")))
-    if len(five_minute) >= 2:
-        last_two = five_minute[-2:]
-        if side == "BUY" and all(_num(row.get("c")) < lower for row in last_two):
-            return True
-        if side == "SELL" and all(_num(row.get("c")) > upper for row in last_two):
-            return True
-    if one_minute:
-        close = _num(one_minute[-1].get("c"))
-        buffer = max(atr1 * 0.25, _num(level.get("half_width")) * 0.5)
-        if side == "BUY" and close < lower - buffer:
-            return True
-        if side == "SELL" and close > upper + buffer:
-            return True
-    return False
+def _level_zone(level: dict[str, Any]) -> tuple[float, float, float, float]:
+    price = _num(level.get("price", level.get("level_price")))
+    low = _num(level.get("zone_low"), price - _num(level.get("half_width")))
+    high = _num(level.get("zone_high"), price + _num(level.get("half_width")))
+    if low <= 0 or high < low:
+        low = price - _num(level.get("half_width"))
+        high = price + _num(level.get("half_width"))
+    half_width = max((high - low) / 2.0, _num(level.get("half_width")), price * 0.00001)
+    return price, low, high, half_width
 
 
-def _has_15m_level_reaction(
-    candles: list[dict[str, Any]],
-    level: dict[str, Any],
-    side: str,
-    lookback: int = 12,
-) -> tuple[bool, list[str]]:
-    """Require a recent directional 15m close after that timeframe tests this level."""
-    if len(candles) < 3:
-        return False, []
-    level_price = _num(level.get("price"))
-    lower = _num(level.get("zone_low"), level_price)
-    upper = _num(level.get("zone_high"), level_price)
-    accepted = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
-    start = max(0, len(candles) - lookback)
-    for index in range(start, len(candles)):
-        candle = candles[index]
-        if _num(candle.get("l")) > upper or _num(candle.get("h")) < lower:
+def _approach(candles: list[dict[str, Any]], low: float, high: float) -> str:
+    """Find the side the latest local test came from."""
+    for index in range(len(candles) - 1, max(0, len(candles) - 6), -1):
+        row = candles[index]
+        touched = _num(row.get("l")) <= high and _num(row.get("h")) >= low
+        if not touched:
             continue
-        analysis = candle_patterns(candles, index, level)
-        matched = [tag for tag in analysis["patterns"] if tag in accepted]
-        op, high, low, close = (
-            _num(candle.get(key)) for key in ("o", "h", "l", "c")
-        )
-        close_position = (close - low) / max(high - low, 1e-12)
-        directional_close = (
-            close > op and close >= level_price and close_position >= 0.55
-            if side == "BUY"
-            else close < op and close <= level_price and close_position <= 0.45
-        )
-        if matched or directional_close:
-            return True, matched or (["15M_BULLISH_LEVEL_CONTEXT"] if side == "BUY"
-                                     else ["15M_BEARISH_LEVEL_CONTEXT"])
-    return False, []
+        previous_close = _num(candles[index - 1].get("c")) if index else 0.0
+        if previous_close > high:
+            return "FROM_ABOVE"
+        if previous_close < low:
+            return "FROM_BELOW"
+        close = _num(row.get("c"))
+        return "INSIDE_ZONE" if low <= close <= high else ("FROM_ABOVE" if close > high else "FROM_BELOW")
+    last_close = _num(candles[-1].get("c")) if candles else 0.0
+    return "FROM_ABOVE" if last_close > high else "FROM_BELOW" if last_close < low else "INSIDE_ZONE"
+
+
+def _waiting(reason: str, approach: str = "UNKNOWN") -> dict[str, Any]:
+    return {"action": "WAITING", "reason": reason, "approach": approach}
 
 
 def evaluate_level(
@@ -309,151 +243,151 @@ def evaluate_level(
     live_price: float | None,
     as_of_ms: int | None = None,
 ) -> dict[str, Any]:
-    """One deterministic confirmation path shared by live evaluation and historical replay."""
-    level_type = str(level.get("type", "")).upper()
-    side = "BUY" if level_type == "SUPPORT" else "SELL" if level_type == "RESISTANCE" else None
-    waiting = {"action": "WAITING", "reason": "NO_CANDLE_CONFIRMATION"}
-    if side is None:
-        return waiting
+    """
+    Fast level-local decision. It reads only the last closed 1m candles around
+    this active level: no 1H/15M trend gates and no distant-market analysis.
+    """
     if as_of_ms is None:
         import time
         as_of_ms = int(time.time() * 1000)
 
-    # Live and replay both make decisions from candles that have fully closed
-    # by the same explicit decision timestamp.
-    one_minute = _closed_rows(candles_by_tf, "1m", as_of_ms)
-    five_minute = _closed_rows(candles_by_tf, "5m", as_of_ms)
-    fifteen_minute = _closed_rows(candles_by_tf, "15m", as_of_ms)
-    one_hour = _closed_rows(candles_by_tf, "1h", as_of_ms)
-    price = _num(live_price, _num(one_minute[-1].get("c")) if one_minute else 0.0)
-    if price <= 0:
-        return {**waiting, "reason": "NO_LIVE_PRICE"}
-    if min(len(one_minute), len(five_minute), len(fifteen_minute), len(one_hour)) < 30:
-        return {**waiting, "reason": "TIMEFRAME_WARMING_UP"}
+    level_type = str(level.get("type", "")).upper()
+    side = "BUY" if level_type == "SUPPORT" else "SELL" if level_type == "RESISTANCE" else None
+    if side is None:
+        return _waiting("INVALID_LEVEL")
 
-    level_price = _num(level.get("price"))
-    lower = _num(level.get("zone_low"), level_price)
-    upper = _num(level.get("zone_high"), level_price)
-    half_width = max(_num(level.get("half_width")), (upper - lower) / 2.0, level_price * 0.00001)
-    atr5, atr1 = _atr(five_minute), _atr(one_minute)
-    if atr5 <= 0 or atr1 <= 0:
-        return {**waiting, "reason": "VOLATILITY_NOT_READY"}
+    one = _closed_rows(candles_by_tf, "1m", as_of_ms)[-20:]
+    if len(one) < 4:
+        return _waiting("WAITING_FOR_LOCAL_CANDLES")
 
-    if price > upper:
-        approach = "FROM_ABOVE"
-        distance_to_zone = price - upper
-    elif price < lower:
-        approach = "FROM_BELOW"
-        distance_to_zone = lower - price
-    else:
-        approach = "INSIDE_ZONE"
-        distance_to_zone = 0.0
-    approach_limit = max(half_width * 4.0, atr5 * 1.5, price * 0.00015)
-    if distance_to_zone > approach_limit:
-        return {**waiting, "reason": "PRICE_NOT_NEAR_LEVEL", "approach": approach}
-    # A decisive closed-candle level break is the primary cancellation reason.
-    if _broken_before_entry(side, level, five_minute, one_minute, atr1):
-        return {**waiting, "reason": "LEVEL_BROKEN", "approach": approach}
+    level_price, zone_low, zone_high, half_width = _level_zone(level)
+    current_price = _num(live_price, _num(one[-1].get("c")))
+    if level_price <= 0 or current_price <= 0:
+        return _waiting("WAITING_FOR_PRICE")
+
+    atr = _atr(one)
+    local_buffer = max(half_width * 2.5, atr * 2.0, level_price * 0.00008)
+    distance = (
+        0.0 if zone_low <= current_price <= zone_high
+        else min(abs(current_price - zone_low), abs(current_price - zone_high))
+    )
+    if distance > local_buffer:
+        return _waiting("PRICE_NOT_NEAR_LEVEL")
+
+    approach = _approach(one, zone_low, zone_high)
     expected_approach = "FROM_ABOVE" if side == "BUY" else "FROM_BELOW"
+
+    # Stop analysing a support/resistance after two decisive closed 1m closes
+    # through the far side of its zone.
+    last_two = one[-2:]
+    if side == "BUY" and all(_num(row.get("c")) < zone_low for row in last_two):
+        return _waiting("SUPPORT_BROKEN", approach)
+    if side == "SELL" and all(_num(row.get("c")) > zone_high for row in last_two):
+        return _waiting("RESISTANCE_BROKEN", approach)
     if approach not in (expected_approach, "INSIDE_ZONE"):
-        return {**waiting, "reason": "APPROACH_SIDE_MISMATCH", "approach": approach}
+        return _waiting("APPROACH_SIDE_MISMATCH", approach)
 
-    required_bias = "BULLISH" if side == "BUY" else "BEARISH"
-    bias_1h = _market_bias(one_hour)
-    bias_15m = _market_bias(fifteen_minute)
-    if bias_1h != bias_15m or bias_1h != required_bias:
-        return {
-            **waiting,
-            "reason": "TIMEFRAME_CONFLICT_OR_NOT_ALIGNED",
-            "approach": approach,
-            "bias_1h": bias_1h,
-            "bias_15m": bias_15m,
-        }
-
-    m15_reacted, m15_tags = _has_15m_level_reaction(fifteen_minute, level, side)
-    if not m15_reacted:
-        return {
-            **waiting,
-            "reason": "15M_LEVEL_REACTION_MISSING",
-            "approach": approach,
-            "bias_1h": bias_1h,
-            "bias_15m": bias_15m,
-        }
-
+    accepted = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
+    reaction_index = None
     reaction_tags: list[str] = []
-    reaction_candles: list[dict[str, Any]] = []
-    reaction_start = max(0, len(five_minute) - 5)
-    accepted_patterns = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
-    for index in range(max(1, reaction_start), len(five_minute)):
-        candle = five_minute[index]
-        touched = _num(candle.get("l")) <= upper and _num(candle.get("h")) >= lower
+    for index in range(max(1, len(one) - 4), len(one)):
+        row = one[index]
+        touched = _num(row.get("l")) <= zone_high and _num(row.get("h")) >= zone_low
         if not touched:
             continue
-        analysis = candle_patterns(five_minute, index, level)
-        matched = [tag for tag in analysis["patterns"] if tag in accepted_patterns]
-        if matched:
-            reaction_tags.extend(matched)
-            reaction_candles.append(candle)
+        analysis = candle_patterns(one, index, level)
+        matched = [tag for tag in analysis["patterns"] if tag in accepted]
+        close = _num(row.get("c"))
+        op = _num(row.get("o"))
+        close_pos = analysis["metrics"].get("close_position", 0.5)
+        reclaimed = (
+            close > level_price and close > op and close_pos >= 0.55
+            if side == "BUY"
+            else close < level_price and close < op and close_pos <= 0.45
+        )
+        if matched and reclaimed:
+            reaction_index = index
+            reaction_tags = matched
 
-    last_five_close = _num(five_minute[-1].get("c"))
-    reclaim = last_five_close > level_price if side == "BUY" else last_five_close < level_price
-    if not reaction_candles or not reclaim:
-        return {
-            **waiting,
-            "reason": "5M_REACTION_OR_RECLAIM_MISSING",
-            "approach": approach,
-            "bias_1h": bias_1h,
-            "bias_15m": bias_15m,
-        }
+    if reaction_index is None:
+        return _waiting("WAITING_FOR_CANDLE_REACTION", approach)
 
-    five_close_time = int(five_minute[-1].get("t", 0)) + TIMEFRAME_MS["5m"]
-    one_close_time = int(one_minute[-1].get("t", 0)) + TIMEFRAME_MS["1m"]
-    if one_close_time < five_close_time or len(one_minute) < 6:
-        return {**waiting, "reason": "WAITING_FOR_1M_CLOSE", "approach": approach}
-
-    current = one_minute[-1]
-    prior = one_minute[-6:-1]
-    body_atr = candle_metrics(current, atr1)
-    close_pos = body_atr["close_position"]
-    body = body_atr["body"]
+    # Local micro confirmation: either the reaction candle itself is a clear
+    # engulfing/displacement/rejection reclaim, or the next closed 1m candle
+    # breaks the nearby micro high/low. No distant timeframe must agree.
+    latest = one[-1]
+    op, high, low, close = (_num(latest.get(key)) for key in ("o", "h", "l", "c"))
+    latest_metrics = candle_metrics(latest, atr)
+    prior_micro = one[-4:-1]
     if side == "BUY":
-        micro_bos = _num(current.get("c")) > max(_num(row.get("h")) for row in prior)
-        displacement = _num(current.get("c")) > _num(current.get("o")) and body >= atr1 * 0.15 and close_pos >= 0.65
+        micro_break = bool(prior_micro) and close > max(_num(row.get("h")) for row in prior_micro)
+        immediate_reaction = (
+            reaction_index == len(one) - 1
+            and close > op and close > level_price
+            and (
+                latest_metrics["lower_wick_pct"] >= 30.0
+                or "BULLISH_ENGULFING" in reaction_tags
+                or "STRONG_BODY_BULLISH" in reaction_tags
+            )
+        )
+        micro_confirmed = micro_break or immediate_reaction
+        directional_close = close > op and close > level_price and latest_metrics["close_position"] >= 0.52
     else:
-        micro_bos = _num(current.get("c")) < min(_num(row.get("l")) for row in prior)
-        displacement = _num(current.get("c")) < _num(current.get("o")) and body >= atr1 * 0.15 and close_pos <= 0.35
-    if not micro_bos or not displacement:
-        return {**waiting, "reason": "1M_STRUCTURE_SHIFT_MISSING", "approach": approach}
+        micro_break = bool(prior_micro) and close < min(_num(row.get("l")) for row in prior_micro)
+        immediate_reaction = (
+            reaction_index == len(one) - 1
+            and close < op and close < level_price
+            and (
+                latest_metrics["upper_wick_pct"] >= 30.0
+                or "BEARISH_ENGULFING" in reaction_tags
+                or "STRONG_BODY_BEARISH" in reaction_tags
+            )
+        )
+        micro_confirmed = micro_break or immediate_reaction
+        directional_close = close < op and close < level_price and latest_metrics["close_position"] <= 0.48
 
-    entry = _num(current.get("c"))
-    rejection_swing = (
-        min(_num(row.get("l")) for row in reaction_candles + five_minute[-2:] + one_minute[-6:])
-        if side == "BUY"
-        else max(_num(row.get("h")) for row in reaction_candles + five_minute[-2:] + one_minute[-6:])
-    )
-    buffer = max(atr1 * 0.15, half_width * 0.10, entry * 0.00002)
-    stop = rejection_swing - buffer if side == "BUY" else rejection_swing + buffer
-    risk = entry - stop if side == "BUY" else stop - entry
+    if not micro_confirmed or not directional_close:
+        return _waiting("WAITING_FOR_MICRO_CONFIRMATION", approach)
+
+    entry = close
+    local_reaction = one[max(0, reaction_index - 1):]
+    stop_buffer = max(atr * 0.20, half_width * 0.10, entry * 0.00002)
+    if side == "BUY":
+        rejection_swing = min(_num(row.get("l")) for row in local_reaction)
+        stop = rejection_swing - stop_buffer
+        risk = entry - stop
+        target = entry + MIN_RR * risk
+        opposing = [
+            item for item in active_levels
+            if str(item.get("type", "")).upper() == "RESISTANCE"
+            and _num(item.get("price")) > entry
+        ]
+        nearest = min(opposing, key=lambda item: _num(item.get("price")), default=None)
+        if nearest is not None:
+            opposing_target = _num(nearest.get("zone_low"), _num(nearest.get("price")))
+            if opposing_target - entry < MIN_RR * risk:
+                return _waiting("NEAREST_RESISTANCE_BLOCKS_1_TO_2_RR", approach)
+            target = opposing_target
+    else:
+        rejection_swing = max(_num(row.get("h")) for row in local_reaction)
+        stop = rejection_swing + stop_buffer
+        risk = stop - entry
+        target = entry - MIN_RR * risk
+        opposing = [
+            item for item in active_levels
+            if str(item.get("type", "")).upper() == "SUPPORT"
+            and _num(item.get("price")) < entry
+        ]
+        nearest = max(opposing, key=lambda item: _num(item.get("price")), default=None)
+        if nearest is not None:
+            opposing_target = _num(nearest.get("zone_high"), _num(nearest.get("price")))
+            if entry - opposing_target < MIN_RR * risk:
+                return _waiting("NEAREST_SUPPORT_BLOCKS_1_TO_2_RR", approach)
+            target = opposing_target
+
     if risk <= 0:
-        return {**waiting, "reason": "INVALID_STOP", "approach": approach}
+        return _waiting("INVALID_STOP", approach)
 
-    opposing = []
-    for other in active_levels:
-        if str(other.get("type", "")).upper() == ("RESISTANCE" if side == "BUY" else "SUPPORT"):
-            other_price = _num(other.get("price"))
-            if (side == "BUY" and other_price > entry) or (side == "SELL" and other_price < entry):
-                opposing.append(other)
-    if opposing:
-        nearest = min(opposing, key=lambda item: _num(item.get("price"))) if side == "BUY" else max(opposing, key=lambda item: _num(item.get("price")))
-        target = _num(nearest.get("zone_low"), _num(nearest.get("price"))) if side == "BUY" else _num(nearest.get("zone_high"), _num(nearest.get("price")))
-    else:
-        target = entry + MIN_RR * risk if side == "BUY" else entry - MIN_RR * risk
-    reward = target - entry if side == "BUY" else entry - target
-    rr = reward / risk if risk > 0 else 0.0
-    if reward <= 0 or rr < MIN_RR:
-        return {**waiting, "reason": "MINIMUM_1_TO_2_RR_NOT_AVAILABLE", "approach": approach}
-
-    last_pattern = candle_patterns(five_minute, len(five_minute) - 1, level)
     return {
         "action": side,
         "reason": "CONFIRMED",
@@ -461,16 +395,14 @@ def evaluate_level(
         "entry": round(entry, 8),
         "stop_loss": round(stop, 8),
         "take_profit": round(target, 8),
-        "risk_reward": round(rr, 3),
-        "signal_time": int(current.get("t", 0)),
-        "patterns": sorted(set(m15_tags + reaction_tags + last_pattern["patterns"])),
-        "bias_1h": bias_1h,
-        "bias_15m": bias_15m,
+        "risk_reward": round(abs(target - entry) / risk, 3),
+        "signal_time": int(_num(latest.get("t"))),
+        "patterns": sorted(set(reaction_tags)),
     }
 
 
 class CandlePsychologyEntryEngine:
-    """Independent level-reaction entry state; never changes source level data."""
+    """Small, independent micro-reaction engine; reads levels without changing them."""
 
     def __init__(self, asset: str = "MARKET") -> None:
         self.asset = asset.upper()
@@ -486,34 +418,27 @@ class CandlePsychologyEntryEngine:
         if as_of_ms is None:
             import time
             as_of_ms = int(time.time() * 1000)
+
         active_keys = {level_key(level) for level in active_levels}
         for stale_key in list(self._triggered):
             if stale_key not in active_keys:
                 self._triggered.pop(stale_key, None)
 
-        # Materialize the shared candle deques once per refresh, not once per level.
-        candle_data = {
-            timeframe: _closed_rows(candles_by_tf, timeframe, as_of_ms)
-            for timeframe in ("1m", "5m", "15m", "1h")
-        }
-        one_minute = candle_data["1m"]
-        current_time = int(one_minute[-1].get("t", 0)) if one_minute else 0
         results: dict[str, dict[str, Any]] = {}
         for level in active_levels:
             key = level_key(level)
             previous_signal = self._triggered.get(key)
             if previous_signal is not None:
-                signal_age = current_time - int(previous_signal.get("signal_time", current_time))
+                signal_age = int(as_of_ms) - (
+                    int(previous_signal.get("signal_time", 0)) + TIMEFRAME_MS["1m"]
+                )
                 if 0 <= signal_age <= SIGNAL_DISPLAY_MS:
                     results[key] = dict(previous_signal)
                 else:
-                    results[key] = {
-                        "action": "WAITING",
-                        "reason": "LEVEL_ALREADY_TRIGGERED",
-                    }
+                    results[key] = _waiting("LEVEL_SIGNAL_ALREADY_USED")
                 continue
 
-            result = evaluate_level(level, active_levels, candle_data, live_price, as_of_ms)
+            result = evaluate_level(level, active_levels, candles_by_tf, live_price, as_of_ms)
             if result.get("action") in ("BUY", "SELL"):
                 self._triggered[key] = dict(result)
             results[key] = result
@@ -524,7 +449,7 @@ def backtest_trades(
     levels_by_step: list[list[dict[str, Any]]],
     candles_by_step: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Evaluate pre-built point-in-time replay steps with the exact live evaluator."""
+    """Replay the exact same local-level evaluator at each historical 1m close."""
     engine = CandlePsychologyEntryEngine()
     trades: list[dict[str, Any]] = []
     for index, step in enumerate(candles_by_step):
@@ -532,10 +457,15 @@ def backtest_trades(
         levels = levels_by_step[index] if index < len(levels_by_step) else []
         decision_time = timestamp + TIMEFRAME_MS["1m"]
         signals = engine.evaluate(
-            levels, step.get("candles", {}), step.get("price"), as_of_ms=decision_time
+            levels,
+            step.get("candles", {}),
+            step.get("price"),
+            as_of_ms=decision_time,
         )
         for key, signal in signals.items():
-            if signal.get("action") not in ("BUY", "SELL") or int(signal.get("signal_time", -1)) != timestamp:
+            if signal.get("action") not in ("BUY", "SELL"):
+                continue
+            if int(signal.get("signal_time", -1)) != timestamp:
                 continue
             trades.append({"level_key": key, **signal})
     return trades

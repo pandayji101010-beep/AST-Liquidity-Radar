@@ -1642,7 +1642,7 @@ async def strategy_alert_worker() -> None:
                         f"{side} CONFIRMED · {level.get('type')}\n"
                         f"Level: {_strategy_alert_price(asset, level.get('level_price'))}\n"
                         f"Strength: {level.get('strength_score')}/100\n"
-                        "1M level reaction + confirmed micro pivot/BOS · minimum 1:2 RR\n"
+                        "5M rejection + 1M structure confirmation · minimum 1:2 RR\n"
                         "Reference alert only — no broker order is placed."
                     )
                     if await send_telegram(message):
@@ -1674,13 +1674,13 @@ async def config() -> dict[str, Any]:
         "strategy_engine": {
             "level_sources": "Confirmed swing highs/lows, historical touches and reactions, volume, and multi-timeframe confluence.",
             "level_validation": "Only fresh, unbroken zones that pass the measured reaction-rate and strength-score filters are displayed.",
-            "entry_confirmation": "Only near an active level: closed 1M level rejection/sweep, confirmed local swing pivot, higher-low for BUY or lower-high for SELL, then a closed 1M micro-structure break. No broader market-structure gate.",
+            "entry_confirmation": "Price must reach the zone; closed 5M rejection and 1M structure break must agree with higher-timeframe market structure.",
             "risk_management": "Structural stop beyond the zone; BUY/SELL is blocked unless the nearest valid target supports at least 1:2 risk/reward.",
             "display": "Rank, support/resistance, exact price, distance, strength score, and BUY/SELL/WAITING status only.",
         },
         "minimum_risk_reward": 2.0,
         "level_timeframes": ["1D", "4H", "1H", "30M", "15M"],
-        "entry_timeframes": ["1M (level-local candle reaction and micro structure)"],
+        "entry_timeframes": ["5M", "1M"],
         "historical_reaction_probability": "Calculated from counted historical level tests and subsequent reactions; never assumed or guaranteed.",
 
 
