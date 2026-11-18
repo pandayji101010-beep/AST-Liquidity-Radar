@@ -940,7 +940,7 @@ def _entry_confirmation(
 
 
 class HighConfidenceMarketLevelsEngine:
-    """Strong 1H–1Y swing and period-extreme levels, prioritising first unmitigated retests."""
+    """Major 1H–1Y levels qualified only by PANIC sweep/reclaim and inverse micro-structure confirmation."""
 
     def __init__(self, asset: str = "MARKET") -> None:
         self.asset = asset.upper()
@@ -1062,7 +1062,7 @@ class HighConfidenceMarketLevelsEngine:
         status = "READY" if levels else "NO TRADE" if ready else "WARMING UP"
         return {
             "asset": self.asset,
-            "strategy_name": "AST High-Confidence Market Levels Engine",
+            "strategy_name": "AST PANIC POINT HTF Levels",
             "status": status,
             "live_reference_price": round(price, 8) if price > 0 else None,
             "levels": levels,
