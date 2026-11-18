@@ -13,9 +13,13 @@ TIMEFRAME_MS = {
     "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000,
     "1w": 7 * 86_400_000, "1mo": 31 * 86_400_000, "1y": 366 * 86_400_000,
 }
-ANALYSIS_TFS = ("1y", "1mo", "1w", "1d", "4h", "1h")
+ANALYSIS_TFS = ("1y", "1mo", "1w", "1d", "4h", "1h", "30m", "15m", "5m")
 STRUCTURE_TFS = ANALYSIS_TFS
-TF_WEIGHT = {"1h": 3.0, "4h": 4.0, "1d": 5.0, "1w": 6.0, "1mo": 7.0, "1y": 8.0}
+# Lower timeframes contribute local precision; higher timeframes retain stronger ranking weight.
+TF_WEIGHT = {
+    "5m": 1.0, "15m": 1.5, "30m": 2.0,
+    "1h": 3.0, "4h": 4.0, "1d": 5.0, "1w": 6.0, "1mo": 7.0, "1y": 8.0,
+}
 TIMEFRAME_LOOKBACK = {
     "1m": 900, "5m": 900, "15m": 900, "30m": 900,
     "1h": 3_000, "4h": 2_000, "1d": 5_000, "1w": 520, "1mo": 240, "1y": 30,
@@ -292,7 +296,10 @@ def _pivot_candidate(
 
     origin = candles[index]
     wick_ratio = _rejection_quality(origin, side)
-    freshness_span = {"1h": 1_500, "4h": 900, "1d": 900, "1w": 208, "1mo": 96, "1y": 10}.get(timeframe, 180)
+    freshness_span = {
+        "5m": 240, "15m": 180, "30m": 120,
+        "1h": 1_500, "4h": 900, "1d": 900, "1w": 208, "1mo": 96, "1y": 10,
+    }.get(timeframe, 180)
     age = max(0, len(candles) - 1 - index)
     freshness = max(0.0, 1.0 - age / freshness_span)
     if freshness < 0.05:
@@ -585,7 +592,10 @@ def _candidate_levels(
     """Build only major 1H–1Y pivots that later produced a PANIC sweep/reclaim and micro BOS."""
     candidates: list[dict[str, Any]] = []
     panic_events = panic_events if panic_events is not None else _panic_event_candidates(data)
-    minimum_bars = {"1h": 48, "4h": 32, "1d": 32, "1w": 12, "1mo": 8, "1y": 5}
+    minimum_bars = {
+        "5m": 48, "15m": 40, "30m": 36,
+        "1h": 48, "4h": 32, "1d": 32, "1w": 12, "1mo": 8, "1y": 5,
+    }
 
     for timeframe in ANALYSIS_TFS:
         candles = data.get(timeframe) or []
@@ -718,7 +728,17 @@ def _decisively_broken(level: dict[str, Any], data: dict[str, list[dict[str, Any
     side = level["type"]
     lower, upper = float(level["zone_low"]), float(level["zone_high"])
     origin_time = int(_number(level.get("origin_time")))
-    for timeframe in ("1h", "4h", "1d", "1w", "1mo", "1y"):
+    all_source_tfs = ("5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo", "1y")
+    source_tfs = [
+        timeframe for timeframe in (level.get("source_timeframes") or [level.get("origin_timeframe", "1h")])
+        if timeframe in TF_WEIGHT
+    ]
+    weakest_source_weight = min((TF_WEIGHT[timeframe] for timeframe in source_tfs), default=TF_WEIGHT["1h"])
+    for timeframe in all_source_tfs:
+        # Validate against the level's own timeframe and higher context; do not let a
+        # lower-timeframe wick invalidate a level confirmed by larger-timeframe confluence.
+        if TF_WEIGHT[timeframe] < weakest_source_weight:
+            continue
         candles = [
             row for row in (data.get(timeframe) or [])
             if int(_number(row.get("t"))) >= origin_time
