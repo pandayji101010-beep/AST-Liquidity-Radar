@@ -562,6 +562,7 @@ body{
 .levels-status.sell{background:#321b20;border-color:#7b343e;color:#ff9ca4}
 .levels-status.waiting{background:#25271f;border-color:#5a5333;color:#e7cf87}
 .levels-empty{padding:18px 12px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6;border:1px dashed #31465d;border-radius:10px;background:#0c1825}
+.levels-group{margin:0 0 18px}.levels-group:last-child{margin-bottom:0}.levels-group-title{font-size:11px;font-weight:900;letter-spacing:.09em;color:#b7c8d8;padding:12px 2px 8px;border-bottom:1px solid #26384b;margin-bottom:10px}
 .levels-footer{font-size:10px;color:var(--muted);line-height:1.6;margin-top:12px;text-align:center}
 @media(max-width:700px){
  .levels-asset{padding:10px}
@@ -625,11 +626,11 @@ body{
 
   <section class="card full" id="strategySection">
     <div class="head">
-      <div><div class="asset">CONFIRMED MARKET LEVELS</div><div class="sub">Strongest completed 5M → 1Y PANIC-confirmed levels · untested / first retest zones</div></div>
+      <div><div class="asset">PANIC POINT LEVELS</div><div class="sub">Main 5M → 1Y levels · separate 1M PANIC levels below</div></div>
     </div>
     <div id="campaignSignals" class="levels-assets"><div class="empty">Loading confirmed support and resistance levels…</div></div>
   </section>
-  <div class="levels-footer">Levels come from completed 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y structure. PANIC sweep/reclaim and inverse micro-shift confirmation are required; repeatedly tested or decisively broken zones are filtered out. BUY / SELL still requires the live PANIC entry sequence; signals are not guaranteed.</div>
+  <div class="levels-footer">Main levels use 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y structure. The separate 1M section uses its own 1-minute sweep/reclaim and later 1-minute micro-shift. Repeatedly tested or broken zones are filtered out; BUY / SELL still requires live PANIC entry confirmation. Signals are not guaranteed.</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -695,7 +696,7 @@ function renderBiasLine(asset){
   return '<div class="bias-block"><div class="bias-heading">TIMEFRAME BIAS · H = HISTORICAL · P = PRESENT · F = PROJECTED</div><div class="bias-line">'+renderBiasItems(asset)+'</div></div>';
 }
 function updateTimeframeBias(root,asset){
-  const section=Array.from(root.querySelectorAll('.levels-asset')).find(item=>item.dataset.asset===asset.asset);
+  const section=Array.from(root.querySelectorAll('.levels-asset')).find(item=>item.dataset.asset===asset.asset&&item.dataset.levelScope==='main');
   if(!section) return;
   const bias=asset.timeframe_bias||{};
   const signature=TIMEFRAME_BIAS_ORDER.map(([key])=>{
@@ -711,9 +712,9 @@ function updateTimeframeBias(root,asset){
   }
   section.dataset.biasSignature=signature;
 }
-function renderAsset(asset){
+function renderAsset(asset, levelsValue=asset.levels, scope='main', statusValue=asset.status){
   const digits=asset.asset==='BTC'?1:3;
-  const levels=Array.isArray(asset.levels)?asset.levels:[];
+  const levels=Array.isArray(levelsValue)?levelsValue:[];
   const rows=levels.map(level=>{
     const kind=level.type==='SUPPORT'?'support':'resistance';
     const priceText=number(level.level_price,digits);
@@ -722,7 +723,7 @@ function renderAsset(asset){
     const distance=number(level.distance,digits)+(level.distance_pct===null||level.distance_pct===undefined?'':' · '+number(level.distance_pct,2)+'%');
     const tfLabels=(level.source_timeframes||[]).map(tf=>tf==='1mo'?'1M':tf==='1y'?'1Y':tf==='1w'?'1W':String(tf).toUpperCase());
     const touchState=String(level.touch_state||'UNTESTED').toUpperCase();
-    return '<div class="levels-row" data-level-key="'+escapeHtml(uiLevelKey(level))+'">'
+    return '<div class="levels-row" data-level-scope="'+scope+'" data-level-key="'+escapeHtml(uiLevelKey(level))+'">'
       +'<div class="levels-cell"><div class="levels-label">Rank</div><div class="levels-value">'+escapeHtml(level.rank)+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Support / Resistance</div><div class="levels-value '+kind+'">'+(kind==='support'?'SUPPORT':'RESISTANCE')+'</div></div>'
       +'<div class="levels-cell"><div class="levels-label">Exact Level Price</div><div class="levels-price-line"><div class="levels-value">'+priceText+'</div><button type="button" class="levels-copy" data-price="'+escapeHtml(priceText)+'" aria-label="Copy level price" onclick="copyLevelPrice(this)">COPY</button><span class="levels-entry-action '+action.toLowerCase()+'">'+action+'</span></div></div>'
@@ -732,12 +733,12 @@ function renderAsset(asset){
       +'<div class="levels-cell"><div class="levels-label">Status</div><div class="levels-status '+escapeHtml(direction)+'">'+escapeHtml(level.status||'WAITING')+'</div></div>'
       +'</div>';
   }).join('');
-  const emptyMessage=asset.status==='WARMING UP'
+  const emptyMessage=statusValue==='WARMING UP'
     ? 'WARMING UP · Waiting for confirmed levels.'
     : 'NO ACTIVE LEVELS · Waiting for confirmed support or resistance.';
-  return '<section class="levels-asset" data-asset="'+escapeHtml(asset.asset)+'">'
+  return '<section class="levels-asset" data-level-scope="'+scope+'" data-asset="'+escapeHtml(asset.asset)+'">'
     +'<div class="levels-asset-title">'+(asset.asset==='BTC'?'BITCOIN (BTC)':'GOLD (XAUUSD)')+'</div>'
-    +renderBiasLine(asset)
+    +(scope==='main'?renderBiasLine(asset):'')
     +'<div class="levels-head"><div>Rank</div><div>Support / Resistance</div><div>Exact Level Price</div><div>Source TF</div><div>Distance</div><div>Strength Score</div><div>Status</div></div>'
     +(rows||'<div class="levels-empty">'+emptyMessage+'</div>')
     +'</section>';
@@ -774,26 +775,38 @@ function renderLevels(payload){
   const root=$('campaignSignals');
   const assets=payload?.assets||[];
   assets.forEach(asset=>updateLivePrice(asset.asset,asset.live_reference_price));
+  const levelSignature=levels=>Array.isArray(levels)
+    ?levels.map(level=>uiLevelKey(level)+'@'+(level.source_timeframes||[]).join('+')+'@'+(level.touch_state||'')).join(',')
+    :'';
   const signature=assets.map(asset=>
-    String(asset.asset)+':'+(Array.isArray(asset.levels)?asset.levels.map(level=>uiLevelKey(level)+'@'+(level.source_timeframes||[]).join('+')+'@'+(level.touch_state||'')).join(','):'')
+    String(asset.asset)+':'+asset.status+':'+levelSignature(asset.levels)+':1M:'+asset.one_minute_status+':'+levelSignature(asset.one_minute_levels)
   ).join('|')||'empty';
-  // Rebuild only when the active level set changes. Polling updates only the
-  // small BUY/SELL badge and changing level cells; the dashboard stays in place.
+  // Main 5m–1y levels and the independent 1m scan always render in separate groups.
   if(root.dataset.levelStructure!==signature){
     root.innerHTML=assets.length
-      ? assets.map(renderAsset).join('')
+      ? '<div class="levels-group"><div class="levels-group-title">MAIN PANIC LEVELS · 5M TO 1Y</div>'
+        +assets.map(asset=>renderAsset(asset,asset.levels,'main',asset.status)).join('')
+        +'</div><div class="levels-group"><div class="levels-group-title">1M PANIC LEVELS · SEPARATE SCAN</div>'
+        +assets.map(asset=>renderAsset(asset,asset.one_minute_levels,'one-minute',asset.one_minute_status)).join('')
+        +'</div>'
       : '<div class="levels-empty">WARMING UP · Waiting for confirmed support and resistance levels.</div>';
     root.dataset.levelStructure=signature;
   }
   for(const asset of assets){
     updateTimeframeBias(root,asset);
-    for(const level of (asset.levels||[])){
-      const key=uiLevelKey(level);
-      const row=Array.from(root.querySelectorAll('.levels-row'))
-        .find(item=>item.dataset.levelKey===key);
-      if(!row) continue;
-      updateEntryBadge(row,level);
-      updateLevelCells(row,level,asset.asset);
+    const groups=[
+      {scope:'main',levels:asset.levels||[]},
+      {scope:'one-minute',levels:asset.one_minute_levels||[]}
+    ];
+    for(const group of groups){
+      for(const level of group.levels){
+        const key=uiLevelKey(level);
+        const row=Array.from(root.querySelectorAll('.levels-row[data-level-scope="'+group.scope+'"]'))
+          .find(item=>item.dataset.levelKey===key&&item.closest('.levels-asset')?.dataset.asset===asset.asset);
+        if(!row) continue;
+        updateEntryBadge(row,level);
+        updateLevelCells(row,level,asset.asset);
+      }
     }
   }
 }
