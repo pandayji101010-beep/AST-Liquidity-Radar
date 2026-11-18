@@ -39,8 +39,8 @@ def daily_candles(start: date, end_exclusive: date):
 def panic_event_fixture():
     hour = 3_600_000
     five_minute = [
-        candle(40 * hour - (20 - index) * 300_000, 100.6, 100.9, 100.3, 100.65, 100.0)
-        for index in range(20)
+        candle(40 * hour - (35 - index) * 300_000, 100.6, 100.9, 100.3, 100.65, 100.0)
+        for index in range(35)
     ]
     event_time = 40 * hour
     # Abnormal 5m selling candle sweeps the 100 support and reclaims it.
