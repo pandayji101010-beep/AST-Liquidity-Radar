@@ -152,6 +152,8 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
 
     def test_support_approached_from_below_does_not_give_buy(self):
         level, data, _price = bullish_setup()
+        timestamp = data["1m"][-6]["t"]
+        data["1m"][-6] = candle(timestamp, 99.6, 99.7, 99.4, 99.5)
         timestamp = data["1m"][-5]["t"]
         data["1m"][-5] = candle(timestamp, 99.6, 100.1, 99.4, 99.5)
         result = evaluate_level(level, [level], data, 101.20, as_of_ms=END_TIME)
