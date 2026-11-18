@@ -1375,16 +1375,24 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
     async with _strategy_scanner_cache_lock:
         assets: list[dict[str, Any]] = []
         for state in states.values():
+            # Copy the live deques on the event-loop thread before handing work to a
+            # background thread. Passing the deques directly lets websocket candle
+            # updates mutate them during iteration, raising "deque mutated during iteration"
+            # and preventing the whole BTC/GOLD strategy cache from refreshing.
+            candle_snapshot = {
+                timeframe: list(rows)
+                for timeframe, rows in state.candles.items()
+            }
             result = await asyncio.to_thread(
                 state.market_levels_engine.snapshot,
-                state.candles,
+                candle_snapshot,
                 state.mark_price,
             )
-            # Independent entry engine consumes the existing engine's active levels read-only.
+            # The entry evaluator reads the same immutable point-in-time candle snapshot.
             active_levels = list(state.market_levels_engine._levels_cache)
             entry_states = state.candle_psychology_engine.evaluate(
                 active_levels,
-                state.candles,
+                candle_snapshot,
                 state.mark_price,
             )
             for displayed_level in result.get("levels", []):
@@ -1672,14 +1680,14 @@ async def config() -> dict[str, Any]:
         "historical_bars_per_timeframe": HISTORY_BARS,
         "strategy": "AST PANIC POINT: major 1H–1Y reference zones qualify only after a closed 5M abnormal-urgency sweep/reclaim and a subsequent inverse 1M/5M micro-structure break.",
         "strategy_engine": {
-            "level_sources": "Closed 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
+            "level_sources": "Closed 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
             "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",
             "entry_confirmation": "BUY requires a 5M support sweep and close back above the level, no acceptance below, then a closed 1M break above the post-panic micro swing. SELL uses the mirrored resistance conditions.",
             "risk_management": "Stop beyond the actual panic extreme plus a volatility buffer; BUY/SELL is blocked unless the nearest valid liquidity target supports at least 1:2 risk/reward.",
-            "display": "Rank, support/resistance, exact price, distance, strength score, and BUY/SELL/WAITING status only.",
+            "display": "Existing dashboard format is unchanged: rank, support/resistance, exact price, source timeframe, distance, strength score, and BUY/SELL/WAITING status.",
         },
         "minimum_risk_reward": 2.0,
-        "level_timeframes": ["1H", "4H", "1D", "1W", "1M", "1Y"],
+        "level_timeframes": ["5M", "15M", "30M", "1H", "4H", "1D", "1W", "1M", "1Y"],
         "entry_timeframes": ["5M", "1M"],
         "historical_reaction_probability": "Not displayed or assumed; level qualification is based on closed-candle PANIC protocol evidence and current retest state.",
 
