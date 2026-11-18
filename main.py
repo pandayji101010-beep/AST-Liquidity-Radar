@@ -28,6 +28,7 @@ from historical_sources import (
 )
 from market_levels_engine import HighConfidenceMarketLevelsEngine
 from candle_psychology_entry_engine import CandlePsychologyEntryEngine, TIMEFRAME_MS, level_key
+from ast_signal_engine import ASTOneMinuteSignalEngine
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -1273,12 +1274,7 @@ async def startup() -> None:
         name="historical-bootstrap",
     )
     background_tasks.append(bootstrap_task)
-    if STRATEGY_ALERTS_ENABLED:
-        alert_task = asyncio.create_task(strategy_alert_worker(), name="market-level-telegram-alerts")
-        background_tasks.append(alert_task)
-        log.info("Market-level Telegram alerts enabled; monitoring every %.1f seconds", STRATEGY_ALERT_POLL_SECONDS)
-    else:
-        log.info("Level Telegram alerts disabled; configure ENABLE_TELEGRAM, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+    log.info("Legacy level-based Telegram alerts are disabled; AST 1m signals are displayed in the dashboard.")
     log.info("AST High-Confidence Market Levels API ready; market history bootstrap running in background")
 
 
@@ -1366,64 +1362,55 @@ async def vantage_mt5_candles(request: Request) -> JSONResponse:
 
 _strategy_scanner_cache: dict[str, Any] | None = None
 _strategy_scanner_cache_lock: asyncio.Lock | None = None
+_signal_engine = ASTOneMinuteSignalEngine()
+_signal_by_asset: dict[str, dict[str, Any]] = {}
 
 
 async def refresh_strategy_scanner_cache() -> dict[str, Any]:
-    """Refresh the main 5m–1y PANIC levels and the independent 1m PANIC section for BTC and GOLD."""
-    global _strategy_scanner_cache, _strategy_scanner_cache_lock
+    """Run the replacement 1m decision engine for BTC and GOLD at 10 Hz."""
+    global _strategy_scanner_cache, _strategy_scanner_cache_lock, _signal_by_asset
     if _strategy_scanner_cache_lock is None:
         _strategy_scanner_cache_lock = asyncio.Lock()
 
     async with _strategy_scanner_cache_lock:
         assets: list[dict[str, Any]] = []
+        signals: dict[str, dict[str, Any]] = {}
+        stamp = now_ms()
         for state in states.values():
-            # Copy the live deques on the event-loop thread before handing work to a
-            # background thread. Passing the deques directly lets websocket candle
-            # updates mutate them during iteration, raising "deque mutated during iteration"
-            # and preventing the whole BTC/GOLD strategy cache from refreshing.
-            candle_snapshot = {
-                timeframe: list(rows)
-                for timeframe, rows in state.candles.items()
-            }
-            result = await asyncio.to_thread(
-                state.market_levels_engine.snapshot,
+            # Copy a bounded, point-in-time candle window. Only completed bars
+            # are consumed by ASTOneMinuteSignalEngine; the quote remains live.
+            candle_snapshot: dict[str, list[dict[str, Any]]] = {}
+            for timeframe, rows in state.candles.items():
+                limit = 1_200 if timeframe == "1m" else 240
+                candle_snapshot[timeframe] = list(rows)[-limit:]
+
+            result = _signal_engine.evaluate(
+                state.key,
                 candle_snapshot,
                 state.mark_price,
+                as_of_ms=stamp,
             )
-            # The entry evaluator reads the same immutable point-in-time candle snapshot.
-            active_levels = list(state.market_levels_engine._levels_cache)
-            entry_states = state.candle_psychology_engine.evaluate(
-                active_levels,
-                candle_snapshot,
-                state.mark_price,
+            fresh = bool(state.mark_ts and stamp - state.mark_ts <= 20_000)
+            result["symbol"] = state.symbol
+            result["data_source"] = state.data_source or "Binance market data"
+            result["live_feed"] = "BINANCE LIVE" if fresh else "WAITING FOR FRESH BINANCE PRICE"
+            result["price_fresh"] = fresh
+            result["mark_age_seconds"] = (
+                round((stamp - state.mark_ts) / 1000.0, 1) if state.mark_ts else None
             )
-            one_minute_levels = list(state.market_levels_engine._one_minute_levels_cache)
-            one_minute_entry_states = state.one_minute_candle_psychology_engine.evaluate(
-                one_minute_levels,
-                candle_snapshot,
-                state.mark_price,
-            )
-            for displayed_level in result.get("levels", []):
-                lookup = {
-                    "type": displayed_level.get("type"),
-                    "price": displayed_level.get("level_price"),
-                }
-                entry = entry_states.get(level_key(lookup), {"action": "WAITING"})
-                displayed_level["entry_action"] = entry.get("action", "WAITING")
-            for displayed_level in result.get("one_minute_levels", []):
-                lookup = {
-                    "type": displayed_level.get("type"),
-                    "price": displayed_level.get("level_price"),
-                }
-                entry = one_minute_entry_states.get(level_key(lookup), {"action": "WAITING"})
-                displayed_level["entry_action"] = entry.get("action", "WAITING")
-            result["data_source"] = state.data_source or "Source not reported"
+            if not fresh and result.get("action") in ("BUY", "SELL"):
+                result["action"] = "WAITING"
+                result["status"] = "STALE FEED"
+                result["reason"] = "Signal held internally; waiting for a fresh Binance quote"
             assets.append(result)
+            signals[state.key] = result
             await asyncio.sleep(0)
 
+        _signal_by_asset = signals
         _strategy_scanner_cache = {
-            "time": now_ms(),
-            "strategy_name": "AST PANIC POINT HTF Levels",
+            "time": stamp,
+            "strategy_name": "AST ONE-MINUTE TREND DECISION",
+            "scan_interval_ms": 100,
             "assets": assets,
             "status": "READY" if assets else "WARMING UP",
         }
@@ -1431,29 +1418,29 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
 
 
 async def strategy_snapshot_worker() -> None:
-    """Keep confirmed market levels and live confirmation status up to date."""
+    """Re-evaluate the cached 1m decision state every 100 milliseconds."""
     while True:
         try:
             await refresh_strategy_scanner_cache()
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("Market levels cache refresh failed")
-        await asyncio.sleep(1.0)
+            log.exception("AST 1m signal engine refresh failed")
+        await asyncio.sleep(0.1)
 
 
 @app.get("/api/strategy")
 async def strategy_scanner() -> dict[str, Any]:
-    """Return validated support/resistance levels plus the independent entry action."""
+    """Return one current BUY/SELL/WAITING decision for each market."""
     if _strategy_scanner_cache is not None:
         return _strategy_scanner_cache
     return {
         "time": now_ms(),
-        "strategy_name": "AST PANIC POINT HTF Levels",
+        "strategy_name": "AST ONE-MINUTE TREND DECISION",
+        "scan_interval_ms": 100,
         "assets": [],
         "status": "WARMING UP",
     }
-
 
 def _run_candle_psychology_backtest(state: AssetState, requested_bars: int) -> dict[str, Any]:
     """Point-in-time replay; live and historical paths share CandlePsychologyEntryEngine.evaluate."""
@@ -1603,6 +1590,7 @@ async def live_price_stream(websocket: WebSocket) -> None:
                     key: {
                         "price": state.mark_price,
                         "mark_ts": state.mark_ts,
+                        "signal": _signal_by_asset.get(key),
                         "source": (
                             "VANTAGE LIVE" if key == "GOLD" and state.broker_candle_feed
                             else "XAUUSDT LIVE" if key == "GOLD"
@@ -1693,7 +1681,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST PANIC POINT: main 5M–1Y reference zones require a closed 5M abnormal-urgency sweep/reclaim and inverse 1M/5M micro-structure break; the separate 1M section uses its own 1M sweep/reclaim and later 1M micro-structure break.",
+        "strategy": "AST One-Minute Trend Decision: completed 1m sweep/reclaim, doji break, displacement or engulfing setup, gated by weighted 5m–1d Binance trend alignment.",
         "strategy_engine": {
             "level_sources": "Closed 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
             "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",
@@ -1702,6 +1690,8 @@ async def config() -> dict[str, Any]:
             "display": "Existing dashboard format is unchanged: rank, support/resistance, exact price, source timeframe, distance, strength score, and BUY/SELL/WAITING status.",
         },
         "minimum_risk_reward": 2.0,
+        "scan_interval_ms": 100,
+        "stop_loss": "Adaptive fixed 30 or 50 pips; BTC pip=$1, GOLD pip=$0.10 display convention. No signal when 1m ATR exceeds 50 pips.",
         "level_timeframes": ["5M", "15M", "30M", "1H", "4H", "1D", "1W", "1M", "1Y"],
         "entry_timeframes": ["5M", "1M"],
         "historical_reaction_probability": "Not displayed or assumed; level qualification is based on closed-candle PANIC protocol evidence and current retest state.",
