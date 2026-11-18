@@ -4,7 +4,9 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 
 from market_levels_engine import (
+    ANALYSIS_TFS,
     HighConfidenceMarketLevelsEngine,
+    TF_WEIGHT,
     TIMEFRAME_MS,
     TIMEFRAME_ORDER,
     _candidate_levels,
@@ -38,11 +40,13 @@ def daily_candles(start: date, end_exclusive: date):
 
 def panic_event_fixture():
     hour = 3_600_000
-    five_minute = [
-        candle(40 * hour - (35 - index) * 300_000, 100.6, 100.9, 100.3, 100.65, 100.0)
-        for index in range(35)
-    ]
     event_time = 40 * hour
+    five_minute = [
+        candle(event_time - (44 - index) * 300_000, 100.6, 100.9, 100.3, 100.65, 100.0)
+        for index in range(44)
+    ]
+    # A confirmed 5m swing-low reference immediately before the panic sweep.
+    five_minute[40] = candle(event_time - 4 * 300_000, 100.4, 100.8, 100.0, 100.4, 100.0)
     # Abnormal 5m selling candle sweeps the 100 support and reclaims it.
     five_minute.append(candle(event_time, 100.4, 100.8, 98.5, 100.6, 240.0))
     five_minute.extend([
@@ -83,11 +87,13 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
         self.assertIn("1mo", result["timeframe_data"])
         self.assertIn("1y", result["timeframe_data"])
 
-    def test_only_one_hour_and_higher_timeframes_create_levels(self):
-        self.assertEqual(set(("1h", "4h", "1d", "1w", "1mo", "1y")), set(
-            ("1h", "4h", "1d", "1w", "1mo", "1y")
-        ))
-        self.assertEqual(TIMEFRAME_ORDER[:6], ("1y", "1mo", "1w", "1d", "4h", "1h"))
+    def test_level_discovery_covers_5m_through_1y(self):
+        self.assertEqual(
+            ANALYSIS_TFS,
+            ("1y", "1mo", "1w", "1d", "4h", "1h", "30m", "15m", "5m"),
+        )
+        self.assertEqual(TIMEFRAME_ORDER[:9], ANALYSIS_TFS)
+        self.assertTrue(TF_WEIGHT["5m"] < TF_WEIGHT["15m"] < TF_WEIGHT["30m"] < TF_WEIGHT["1h"])
 
     def test_confirmed_pivot_requires_right_side_candles(self):
         rows = [
@@ -242,6 +248,20 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
         self.assertTrue(support[0]["panic_confirmed"])
         self.assertEqual(support[0]["micro_shift_timeframe"], "1m")
         self.assertGreaterEqual(support[0]["panic_range_atr"], 1.35)
+
+    def test_lower_timeframe_panic_sweep_can_create_a_5m_source_level(self):
+        data = panic_event_fixture()
+        events = _panic_event_candidates(data)
+        candidates = _candidate_levels(data, events)
+        five_minute_support = [
+            item for item in candidates
+            if item["side"] == "SUPPORT"
+            and item["timeframe"] == "5m"
+            and abs(item["price"] - 100.0) < 0.01
+        ]
+        self.assertTrue(five_minute_support)
+        self.assertTrue(five_minute_support[0]["panic_confirmed"])
+        self.assertEqual(five_minute_support[0]["touch_state"], "UNTESTED")
 
     def test_higher_high_and_higher_low_structure_is_bullish(self):
         rows = []
