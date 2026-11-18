@@ -125,11 +125,13 @@ class AssetState:
     trend_lock_reason: str = "Waiting for multi-timeframe alignment"
     market_levels_engine: HighConfidenceMarketLevelsEngine = field(init=False)
     candle_psychology_engine: CandlePsychologyEntryEngine = field(init=False)
+    one_minute_candle_psychology_engine: CandlePsychologyEntryEngine = field(init=False)
     data_source: str | None = None
 
     def __post_init__(self) -> None:
         self.market_levels_engine = HighConfidenceMarketLevelsEngine(self.key)
         self.candle_psychology_engine = CandlePsychologyEntryEngine(self.key)
+        self.one_minute_candle_psychology_engine = CandlePsychologyEntryEngine(self.key)
     broker_candle_feed: bool = False
     broker_candle_ts: int | None = None
     binance_tradfi_stream_active: bool = False
@@ -1367,7 +1369,7 @@ _strategy_scanner_cache_lock: asyncio.Lock | None = None
 
 
 async def refresh_strategy_scanner_cache() -> dict[str, Any]:
-    """Refresh PANIC-confirmed HTF levels and separate live entry decisions for BTC and GOLD."""
+    """Refresh the main 5m–1y PANIC levels and the independent 1m PANIC section for BTC and GOLD."""
     global _strategy_scanner_cache, _strategy_scanner_cache_lock
     if _strategy_scanner_cache_lock is None:
         _strategy_scanner_cache_lock = asyncio.Lock()
@@ -1395,12 +1397,25 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
                 candle_snapshot,
                 state.mark_price,
             )
+            one_minute_levels = list(state.market_levels_engine._one_minute_levels_cache)
+            one_minute_entry_states = state.one_minute_candle_psychology_engine.evaluate(
+                one_minute_levels,
+                candle_snapshot,
+                state.mark_price,
+            )
             for displayed_level in result.get("levels", []):
                 lookup = {
                     "type": displayed_level.get("type"),
                     "price": displayed_level.get("level_price"),
                 }
                 entry = entry_states.get(level_key(lookup), {"action": "WAITING"})
+                displayed_level["entry_action"] = entry.get("action", "WAITING")
+            for displayed_level in result.get("one_minute_levels", []):
+                lookup = {
+                    "type": displayed_level.get("type"),
+                    "price": displayed_level.get("level_price"),
+                }
+                entry = one_minute_entry_states.get(level_key(lookup), {"action": "WAITING"})
                 displayed_level["entry_action"] = entry.get("action", "WAITING")
             result["data_source"] = state.data_source or "Source not reported"
             assets.append(result)
@@ -1678,7 +1693,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST PANIC POINT: major 1H–1Y reference zones qualify only after a closed 5M abnormal-urgency sweep/reclaim and a subsequent inverse 1M/5M micro-structure break.",
+        "strategy": "AST PANIC POINT: main 5M–1Y reference zones require a closed 5M abnormal-urgency sweep/reclaim and inverse 1M/5M micro-structure break; the separate 1M section uses its own 1M sweep/reclaim and later 1M micro-structure break.",
         "strategy_engine": {
             "level_sources": "Closed 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
             "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",

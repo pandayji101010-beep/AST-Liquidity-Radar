@@ -17,7 +17,7 @@ ANALYSIS_TFS = ("1y", "1mo", "1w", "1d", "4h", "1h", "30m", "15m", "5m")
 STRUCTURE_TFS = ANALYSIS_TFS
 # Lower timeframes contribute local precision; higher timeframes retain stronger ranking weight.
 TF_WEIGHT = {
-    "5m": 1.0, "15m": 1.5, "30m": 2.0,
+    "1m": 0.5, "5m": 1.0, "15m": 1.5, "30m": 2.0,
     "1h": 3.0, "4h": 4.0, "1d": 5.0, "1w": 6.0, "1mo": 7.0, "1y": 8.0,
 }
 TIMEFRAME_LOOKBACK = {
@@ -421,6 +421,148 @@ def _panic_event_candidates(data: dict[str, list[dict[str, Any]]]) -> list[dict[
     return events
 
 
+def _one_minute_panic_candidates(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Find independent 1m liquidity sweeps, reclaims and later 1m micro-structure breaks."""
+    candles = data.get("1m") or []
+    if len(candles) < 40:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    start = max(20, len(candles) - TIMEFRAME_LOOKBACK["1m"])
+    for index in range(start, len(candles) - 4):
+        history = candles[index - 12:index]
+        if len(history) < 12:
+            continue
+        atr = _atr(candles, index - 1)
+        if atr <= 0:
+            continue
+
+        row = candles[index]
+        op, high, low, close = (_number(row.get(key)) for key in ("o", "h", "l", "c"))
+        span = max(high - low, 1e-12)
+        range_atr = span / atr
+        if range_atr < 1.35:
+            continue
+
+        close_position = (close - low) / span
+        upper_wick = high - max(op, close)
+        lower_wick = min(op, close) - low
+        reference_low = min(_number(item.get("l")) for item in history)
+        reference_high = max(_number(item.get("h")) for item in history)
+        min_sweep = max(atr * 0.04, close * 0.00002)
+
+        side = None
+        price = 0.0
+        wick_ratio = 0.0
+        sweep_distance = 0.0
+        if (
+            reference_low - low >= min_sweep
+            and close > reference_low
+            and close_position >= 0.58
+            and lower_wick / span >= 0.18
+        ):
+            side = "SUPPORT"
+            price = reference_low
+            wick_ratio = lower_wick / span
+            sweep_distance = reference_low - low
+        elif (
+            high - reference_high >= min_sweep
+            and close < reference_high
+            and close_position <= 0.42
+            and upper_wick / span >= 0.18
+        ):
+            side = "RESISTANCE"
+            price = reference_high
+            wick_ratio = upper_wick / span
+            sweep_distance = high - reference_high
+        if side is None or price <= 0:
+            continue
+
+        # Require three closed post-sweep candles to establish the micro swing,
+        # followed by a decisive close through it in the opposite direction.
+        seed = candles[index + 1:index + 4]
+        if len(seed) < 3:
+            continue
+        micro_reference = (
+            max(_number(item.get("h")) for item in seed)
+            if side == "SUPPORT"
+            else min(_number(item.get("l")) for item in seed)
+        )
+        micro_shift = None
+        for shift_index in range(index + 4, min(len(candles), index + 14)):
+            confirm = candles[shift_index]
+            shift_atr = _atr(candles, shift_index) or atr
+            shift_open, shift_high, shift_low, shift_close = (
+                _number(confirm.get(key)) for key in ("o", "h", "l", "c")
+            )
+            shift_span = max(shift_high - shift_low, 1e-12)
+            shift_body = abs(shift_close - shift_open)
+            shift_position = (shift_close - shift_low) / shift_span
+            min_body = max(shift_atr * 0.06, abs(shift_close) * 0.00001)
+            if side == "SUPPORT":
+                confirmed = (
+                    shift_close > micro_reference
+                    and shift_close > shift_open
+                    and shift_body >= min_body
+                    and shift_position >= 0.56
+                )
+            else:
+                confirmed = (
+                    shift_close < micro_reference
+                    and shift_close < shift_open
+                    and shift_body >= min_body
+                    and shift_position <= 0.44
+                )
+            if confirmed:
+                micro_shift = (shift_index, shift_close)
+                break
+        if micro_shift is None:
+            continue
+
+        half_width = max(price * 0.00002, min(atr * 0.12, price * 0.0005))
+        lower, upper = price - half_width, price + half_width
+        # The sweep itself reclaims the level; later acceptance beyond the zone
+        # consumes it and removes it from the separate 1m section.
+        if _is_broken_after(candles, index + 1, side, lower, upper):
+            continue
+
+        age = max(0, len(candles) - 1 - index)
+        freshness = max(0.0, 1.0 - age / 240.0)
+        if freshness < 0.05:
+            continue
+
+        event_time = int(row["t"])
+        candidates.append({
+            "side": side,
+            "price": price,
+            "half_width": half_width,
+            "timeframe": "1m",
+            "touches": 0,
+            "reactions": 0,
+            "touch_state": "UNTESTED",
+            "first_touch_time": None,
+            "last_touch_time": event_time,
+            "freshness": freshness,
+            "impulse_atr": range_atr,
+            "wick_ratio": wick_ratio,
+            "volume_ratio": _volume_ratio(candles, index),
+            "liquidity_pool": True,
+            "origin_time": event_time,
+            "origin_kind": "1M_PANIC_SWEEP",
+            "panic_confirmed": True,
+            "panic_time": event_time,
+            "panic_extreme": low if side == "SUPPORT" else high,
+            "panic_range_atr": range_atr,
+            "panic_sweep_atr": sweep_distance / max(atr, 1e-12),
+            "panic_volume_ratio": _volume_ratio(candles, index),
+            "micro_shift_timeframe": "1m",
+            "micro_shift_time": int(candles[micro_shift[0]]["t"]),
+            "prior_tests": 0,
+            "period_age": 0,
+        })
+    return candidates
+
+
 def _panic_reference_candidate(
     candles: list[dict[str, Any]],
     timeframe: str,
@@ -728,7 +870,7 @@ def _decisively_broken(level: dict[str, Any], data: dict[str, list[dict[str, Any
     side = level["type"]
     lower, upper = float(level["zone_low"]), float(level["zone_high"])
     origin_time = int(_number(level.get("origin_time")))
-    all_source_tfs = ("5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo", "1y")
+    all_source_tfs = ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo", "1y")
     source_tfs = [
         timeframe for timeframe in (level.get("source_timeframes") or [level.get("origin_timeframe", "1h")])
         if timeframe in TF_WEIGHT
@@ -966,6 +1108,7 @@ class HighConfidenceMarketLevelsEngine:
         self.asset = asset.upper()
         self._signature: tuple[Any, ...] | None = None
         self._levels_cache: list[dict[str, Any]] = []
+        self._one_minute_levels_cache: list[dict[str, Any]] = []
         self._bias_cache: tuple[str, dict[str, str]] = ("MIXED", {})
 
     @staticmethod
@@ -984,6 +1127,8 @@ class HighConfidenceMarketLevelsEngine:
         panic_events = _panic_event_candidates(data)
         candidates = _candidate_levels(data, panic_events)
         self._levels_cache = _merge_levels(candidates, data)
+        one_minute_candidates = _one_minute_panic_candidates(data)
+        self._one_minute_levels_cache = _merge_levels(one_minute_candidates, data)
         self._bias_cache = _higher_timeframe_bias(data)
         self._signature = self._data_signature(data)
 
@@ -1066,6 +1211,67 @@ class HighConfidenceMarketLevelsEngine:
                 item["rank"] = rank
             levels = display
 
+        one_minute_levels: list[dict[str, Any]] = []
+        one_minute_history_ready = len(data.get("1m") or []) >= 40
+        one_minute_status = "NO TRADE" if one_minute_history_ready else "WARMING UP"
+        if price > 0:
+            one_minute_supports = [
+                item for item in self._one_minute_levels_cache
+                if item["type"] == "SUPPORT" and float(item["price"]) <= price + float(item["half_width"])
+            ]
+            one_minute_resistances = [
+                item for item in self._one_minute_levels_cache
+                if item["type"] == "RESISTANCE" and float(item["price"]) >= price - float(item["half_width"])
+            ]
+            visible_supports = sorted(
+                one_minute_supports,
+                key=lambda item: (-int(item["strength_score"]), abs(price - float(item["price"]))),
+            )[:3]
+            visible_resistances = sorted(
+                one_minute_resistances,
+                key=lambda item: (-int(item["strength_score"]), abs(price - float(item["price"]))),
+            )[:3]
+            one_minute_chosen = visible_supports + visible_resistances
+            htf_bias, _structure = self._bias_cache
+            confirmations = [
+                (level, *_entry_confirmation(level, data, price, htf_bias, self._one_minute_levels_cache))
+                for level in one_minute_chosen
+            ]
+            active = [row for row in confirmations if row[1] in ("BUY", "SELL")]
+            selected_signal = max(
+                active,
+                key=lambda row: (int(row[0]["strength_score"]), -abs(price - float(row[0]["price"]))),
+                default=None,
+            )
+            display = []
+            for level, status, plan in confirmations:
+                final_status = status if selected_signal and level is selected_signal[0] else "WAITING"
+                distance = abs(price - float(level["price"]))
+                display.append({
+                    "type": level["type"],
+                    "level_price": round(float(level["price"]), 8),
+                    "distance": round(distance, 8),
+                    "distance_pct": round(distance / price * 100.0, 4) if price else None,
+                    "strength_score": int(level["strength_score"]),
+                    "status": final_status,
+                    "reaction_probability": level["reaction_probability"],
+                    "historical_touches": level["historical_touches"],
+                    "historical_reactions": level["historical_reactions"],
+                    "timeframe_confluence": 1,
+                    "source_timeframes": ["1m"],
+                    "origin_timeframe": "1m",
+                    "touch_state": level["touch_state"],
+                    "departure_atr": level["departure_atr"],
+                    "first_touch_time": level["first_touch_time"],
+                    "signal_time": plan.get("signal_time") if plan else None,
+                })
+            display.sort(key=lambda item: (item["distance"], -item["strength_score"]))
+            for rank, item in enumerate(display, start=1):
+                item["rank"] = rank
+            one_minute_levels = display
+            if one_minute_levels:
+                one_minute_status = "READY"
+
         timeframe_bias = {
             timeframe: _timeframe_bias(data.get(timeframe) or [])
             for timeframe in TIMEFRAME_ORDER
@@ -1086,6 +1292,9 @@ class HighConfidenceMarketLevelsEngine:
             "status": status,
             "live_reference_price": round(price, 8) if price > 0 else None,
             "levels": levels,
+            "one_minute_levels": one_minute_levels,
+            "one_minute_status": one_minute_status,
+            "one_minute_history_ready": one_minute_history_ready,
             "timeframe_data": {timeframe: len(data.get(timeframe) or []) for timeframe in TIMEFRAME_ORDER},
             "timeframe_bias": timeframe_bias,
             "higher_timeframe_structure": self._bias_cache[1],

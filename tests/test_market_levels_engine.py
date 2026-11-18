@@ -14,6 +14,7 @@ from market_levels_engine import (
     _decisively_broken,
     _panic_event_candidates,
     _merge_levels,
+    _one_minute_panic_candidates,
     _pivot_candidate,
     _resample_calendar_timeframes,
     _structure_bias,
@@ -77,6 +78,24 @@ def panic_event_fixture():
     return {"1h": hourly, "5m": five_minute, "1m": one_minute}
 
 
+def one_minute_panic_fixture():
+    minute = 60_000
+    rows = [
+        candle((index + 1) * minute, 100.4, 100.9, 100.0, 100.5, 100.0)
+        for index in range(40)
+    ]
+    event_time = 41 * minute
+    # 1m panic candle sweeps the previous 12-bar sell-side liquidity and reclaims it.
+    rows.append(candle(event_time, 100.4, 100.8, 98.5, 100.6, 220.0))
+    rows.extend([
+        candle(event_time + minute, 100.6, 100.8, 100.5, 100.7, 100.0),
+        candle(event_time + 2 * minute, 100.7, 100.9, 100.6, 100.8, 105.0),
+        candle(event_time + 3 * minute, 100.8, 101.0, 100.7, 100.9, 105.0),
+        candle(event_time + 4 * minute, 100.9, 101.4, 100.85, 101.3, 150.0),
+    ])
+    return {"1m": rows}
+
+
 class HighConfidenceMarketLevelsTests(unittest.TestCase):
     def test_empty_history_waits_without_inventing_levels(self):
         engine = HighConfidenceMarketLevelsEngine("BTC")
@@ -93,7 +112,8 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
             ("1y", "1mo", "1w", "1d", "4h", "1h", "30m", "15m", "5m"),
         )
         self.assertEqual(TIMEFRAME_ORDER[:9], ANALYSIS_TFS)
-        self.assertTrue(TF_WEIGHT["5m"] < TF_WEIGHT["15m"] < TF_WEIGHT["30m"] < TF_WEIGHT["1h"])
+        self.assertTrue(TF_WEIGHT["1m"] < TF_WEIGHT["5m"] < TF_WEIGHT["15m"] < TF_WEIGHT["30m"] < TF_WEIGHT["1h"])
+        self.assertNotIn("1m", ANALYSIS_TFS)
 
     def test_confirmed_pivot_requires_right_side_candles(self):
         rows = [
@@ -262,6 +282,24 @@ class HighConfidenceMarketLevelsTests(unittest.TestCase):
         self.assertTrue(five_minute_support)
         self.assertTrue(five_minute_support[0]["panic_confirmed"])
         self.assertEqual(five_minute_support[0]["touch_state"], "UNTESTED")
+
+    def test_one_minute_panic_levels_are_generated_in_their_own_snapshot_section(self):
+        data = one_minute_panic_fixture()
+        candidates = _one_minute_panic_candidates(data)
+        support = [
+            item for item in candidates
+            if item["side"] == "SUPPORT" and item["timeframe"] == "1m"
+        ]
+        self.assertTrue(support)
+        self.assertTrue(support[0]["panic_confirmed"])
+        self.assertEqual(support[0]["micro_shift_timeframe"], "1m")
+
+        engine = HighConfidenceMarketLevelsEngine("BTC")
+        result = engine.snapshot(data, 101.3)
+        self.assertEqual(result["levels"], [])
+        self.assertTrue(result["one_minute_levels"])
+        self.assertEqual(result["one_minute_levels"][0]["source_timeframes"], ["1m"])
+        self.assertEqual(result["one_minute_status"], "READY")
 
     def test_higher_high_and_higher_low_structure_is_bullish(self):
         rows = []
