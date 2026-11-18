@@ -1400,7 +1400,7 @@ async def refresh_strategy_scanner_cache() -> dict[str, Any]:
 
         _strategy_scanner_cache = {
             "time": now_ms(),
-            "strategy_name": "AST High-Confidence Market Levels Engine",
+            "strategy_name": "AST PANIC POINT HTF Levels",
             "assets": assets,
             "status": "READY" if assets else "WARMING UP",
         }
@@ -1426,7 +1426,7 @@ async def strategy_scanner() -> dict[str, Any]:
         return _strategy_scanner_cache
     return {
         "time": now_ms(),
-        "strategy_name": "AST High-Confidence Market Levels Engine",
+        "strategy_name": "AST PANIC POINT HTF Levels",
         "assets": [],
         "status": "WARMING UP",
     }
@@ -1672,14 +1672,14 @@ async def config() -> dict[str, Any]:
         "historical_bars_per_timeframe": HISTORY_BARS,
         "strategy": "AST High-Confidence Market Levels: historical reaction-tested support/resistance, merged across 1D/4H/1H/30M/15M.",
         "strategy_engine": {
-            "level_sources": "Confirmed swing highs/lows, historical touches and reactions, volume, and multi-timeframe confluence.",
-            "level_validation": "Only fresh, unbroken zones that pass the measured reaction-rate and strength-score filters are displayed.",
-            "entry_confirmation": "Price must reach the zone; closed 5M rejection and 1M structure break must agree with higher-timeframe market structure.",
-            "risk_management": "Structural stop beyond the zone; BUY/SELL is blocked unless the nearest valid target supports at least 1:2 risk/reward.",
+            "level_sources": "Closed 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
+            "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",
+            "entry_confirmation": "BUY requires a 5M support sweep and close back above the level, no acceptance below, then a closed 1M break above the post-panic micro swing. SELL uses the mirrored resistance conditions.",
+            "risk_management": "Stop beyond the actual panic extreme plus a volatility buffer; BUY/SELL is blocked unless the nearest valid liquidity target supports at least 1:2 risk/reward.",
             "display": "Rank, support/resistance, exact price, distance, strength score, and BUY/SELL/WAITING status only.",
         },
         "minimum_risk_reward": 2.0,
-        "level_timeframes": ["1D", "4H", "1H", "30M", "15M"],
+        "level_timeframes": ["1H", "4H", "1D", "1W", "1M", "1Y"],
         "entry_timeframes": ["5M", "1M"],
         "historical_reaction_probability": "Calculated from counted historical level tests and subsequent reactions; never assumed or guaranteed.",
 
@@ -1687,8 +1687,9 @@ async def config() -> dict[str, Any]:
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
         "telegram_configured": ENABLE_TELEGRAM and bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "notes": [
-            "Structure setups are rule-based and educational, not probabilities or guaranteed signals.",
-            "Origin zones are candle-derived candidate supply/demand blocks; retest counts are closed-candle touches, not verified institutional order flow.",
+            "Panic Point is a rule-based framework label, not a standardised indicator or a guaranteed reversal.",
+            "A panic candle is setup context only; the dashboard requires sweep/reclaim, no acceptance beyond the level, and an inverse micro-structure break before showing BUY or SELL.",
+            "Historical 5M volume is used only as a secondary urgency clue when sufficiently populated; liquidation, open-interest and funding feeds are not treated as mandatory historical proof.",
             "Major/minor pivots require 5/2 right-side closed candles respectively, so signals intentionally confirm after the pivot forms.",
             "BTC market data uses Binance USD-M; GOLD historical and live market data use Binance XAUUSDT TRADIFI_PERPETUAL only.",
             "Binance TradFi Gold continuous-kline streams provide OHLCV; OI and order-book metrics remain unavailable unless separately connected.",
