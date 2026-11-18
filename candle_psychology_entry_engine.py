@@ -236,6 +236,87 @@ def _waiting(reason: str, approach: str = "UNKNOWN") -> dict[str, Any]:
     return {"action": "WAITING", "reason": reason, "approach": approach}
 
 
+def _panic_sweep_candidate(
+    five_minute: list[dict[str, Any]],
+    level: dict[str, Any],
+    side: str,
+) -> dict[str, Any] | None:
+    """Return a recent closed 5m abnormal-urgency sweep/reclaim at this HTF level."""
+    price, zone_low, zone_high, _half_width = _level_zone(level)
+    for index in range(max(15, len(five_minute) - 8), len(five_minute)):
+        row = five_minute[index]
+        atr = _atr(five_minute[:index])
+        if atr <= 0:
+            continue
+        metrics = candle_metrics(row, atr)
+        range_atr = metrics["range"] / atr
+        prior_volumes = [
+            _num(item.get("v"))
+            for item in five_minute[max(0, index - 20):index]
+            if _num(item.get("v")) > 0
+        ]
+        current_volume = _num(row.get("v"))
+        volume_reliable = current_volume > 0 and len(prior_volumes) >= 10
+        volume_ratio = (
+            current_volume / (sum(prior_volumes) / len(prior_volumes))
+            if volume_reliable else 0.0
+        )
+        # Expansion is the primary panic evidence; volume is an optional, venue-specific boost.
+        if range_atr < 1.35 and not (range_atr >= 1.0 and volume_reliable and volume_ratio >= 1.5):
+            continue
+
+        op, high, low, close = (_num(row.get(key)) for key in ("o", "h", "l", "c"))
+        if side == "BUY":
+            sweep_depth = zone_low - low
+            min_sweep = max(atr * 0.03, price * 0.00001)
+            reclaimed = (
+                sweep_depth >= min_sweep
+                and close > price
+                and metrics["close_position"] >= 0.58
+                and metrics["lower_wick_pct"] >= 18.0
+            )
+        else:
+            sweep_depth = high - zone_high
+            min_sweep = max(atr * 0.03, price * 0.00001)
+            reclaimed = (
+                sweep_depth >= min_sweep
+                and close < price
+                and metrics["close_position"] <= 0.42
+                and metrics["upper_wick_pct"] >= 18.0
+            )
+        if not reclaimed:
+            continue
+
+        return {
+            "index": index,
+            "time": int(_num(row.get("t"))),
+            "close_time": int(_num(row.get("t"))) + TIMEFRAME_MS["5m"],
+            "panic_extreme": low if side == "BUY" else high,
+            "range_atr": range_atr,
+            "volume_ratio": volume_ratio,
+            "volume_reliable": volume_reliable,
+        }
+    return None
+
+
+def _accepted_beyond(
+    candles: list[dict[str, Any]],
+    start_index: int,
+    side: str,
+    zone_low: float,
+    zone_high: float,
+) -> bool:
+    """Two consecutive closed 5m closes beyond the zone invalidate the reclaim."""
+    streak = 0
+    for row in candles[max(0, start_index):]:
+        close = _num(row.get("c"))
+        beyond = close < zone_low if side == "BUY" else close > zone_high
+        streak = streak + 1 if beyond else 0
+        if streak >= 2:
+            return True
+    return False
+
+
 def evaluate_level(
     level: dict[str, Any],
     active_levels: list[dict[str, Any]],
@@ -244,8 +325,8 @@ def evaluate_level(
     as_of_ms: int | None = None,
 ) -> dict[str, Any]:
     """
-    Fast level-local decision. It reads only the last closed 1m candles around
-    this active level: no 1H/15M trend gates and no distant-market analysis.
+    PANIC Point entry decision: 5m urgency + sweep/reclaim, then a closed 1m
+    opposite-side micro swing break. A level touch or rejection alone is not an entry.
     """
     if as_of_ms is None:
         import time
@@ -255,18 +336,25 @@ def evaluate_level(
     side = "BUY" if level_type == "SUPPORT" else "SELL" if level_type == "RESISTANCE" else None
     if side is None:
         return _waiting("INVALID_LEVEL")
+    if level.get("panic_confirmed") is False:
+        return _waiting("LEVEL_NOT_PANIC_CONFIRMED")
 
-    one = _closed_rows(candles_by_tf, "1m", as_of_ms)[-20:]
-    if len(one) < 4:
-        return _waiting("WAITING_FOR_LOCAL_CANDLES")
+    one = _closed_rows(candles_by_tf, "1m", as_of_ms)[-40:]
+    five = _closed_rows(candles_by_tf, "5m", as_of_ms)[-40:]
+    if len(one) < 8 or len(five) < 16:
+        return _waiting("WAITING_FOR_1M_5M_CANDLES")
 
     level_price, zone_low, zone_high, half_width = _level_zone(level)
     current_price = _num(live_price, _num(one[-1].get("c")))
     if level_price <= 0 or current_price <= 0:
         return _waiting("WAITING_FOR_PRICE")
 
-    atr = _atr(one)
-    local_buffer = max(half_width * 2.5, atr * 2.0, level_price * 0.00008)
+    atr1 = _atr(one)
+    atr5 = _atr(five)
+    if atr1 <= 0 or atr5 <= 0:
+        return _waiting("WAITING_FOR_ATR")
+
+    local_buffer = max(half_width * 3.0, atr5 * 2.5, atr1 * 5.0, level_price * 0.00008)
     distance = (
         0.0 if zone_low <= current_price <= zone_high
         else min(abs(current_price - zone_low), abs(current_price - zone_high))
@@ -276,87 +364,57 @@ def evaluate_level(
 
     approach = _approach(one, zone_low, zone_high)
     expected_approach = "FROM_ABOVE" if side == "BUY" else "FROM_BELOW"
+    if approach not in (expected_approach, "INSIDE_ZONE"):
+        return _waiting("APPROACH_SIDE_MISMATCH", approach)
 
-    # Stop analysing a support/resistance after two decisive closed 1m closes
-    # through the far side of its zone.
     last_two = one[-2:]
     if side == "BUY" and all(_num(row.get("c")) < zone_low for row in last_two):
         return _waiting("SUPPORT_BROKEN", approach)
     if side == "SELL" and all(_num(row.get("c")) > zone_high for row in last_two):
         return _waiting("RESISTANCE_BROKEN", approach)
-    if approach not in (expected_approach, "INSIDE_ZONE"):
-        return _waiting("APPROACH_SIDE_MISMATCH", approach)
 
-    accepted = _BULLISH_REACTIONS if side == "BUY" else _BEARISH_REACTIONS
-    reaction_index = None
-    reaction_tags: list[str] = []
-    for index in range(max(1, len(one) - 4), len(one)):
-        row = one[index]
-        touched = _num(row.get("l")) <= zone_high and _num(row.get("h")) >= zone_low
-        if not touched:
-            continue
-        analysis = candle_patterns(one, index, level)
-        matched = [tag for tag in analysis["patterns"] if tag in accepted]
-        close = _num(row.get("c"))
-        op = _num(row.get("o"))
-        close_pos = analysis["metrics"].get("close_position", 0.5)
-        reclaimed = (
-            close > level_price and close > op and close_pos >= 0.55
-            if side == "BUY"
-            else close < level_price and close < op and close_pos <= 0.45
-        )
-        if matched and reclaimed:
-            reaction_index = index
-            reaction_tags = matched
+    panic = _panic_sweep_candidate(five, level, side)
+    if panic is None:
+        return _waiting("WAITING_FOR_PANIC_URGENCY_SWEEP_RECLAIM", approach)
+    if _accepted_beyond(five, int(panic["index"]), side, zone_low, zone_high):
+        return _waiting("PRICE_ACCEPTED_BEYOND_LEVEL", approach)
 
-    if reaction_index is None:
-        return _waiting("WAITING_FOR_CANDLE_REACTION", approach)
+    # The inverse micro shift must occur after the 5m sweep candle has closed.
+    post_event = [
+        row for row in one
+        if int(_num(row.get("t"))) >= int(panic["close_time"])
+    ]
+    if len(post_event) < 4:
+        return _waiting("WAITING_FOR_POST_PANIC_MICRO_SHIFT", approach)
 
-    # Local micro confirmation: either the reaction candle itself is a clear
-    # engulfing/displacement/rejection reclaim, or the next closed 1m candle
-    # breaks the nearby micro high/low. No distant timeframe must agree.
-    latest = one[-1]
+    latest = post_event[-1]
+    prior_micro = post_event[-4:-1]
     op, high, low, close = (_num(latest.get(key)) for key in ("o", "h", "l", "c"))
-    latest_metrics = candle_metrics(latest, atr)
-    prior_micro = one[-4:-1]
+    latest_metrics = candle_metrics(latest, atr1)
     if side == "BUY":
-        micro_break = bool(prior_micro) and close > max(_num(row.get("h")) for row in prior_micro)
-        immediate_reaction = (
-            reaction_index == len(one) - 1
-            and close > op and close > level_price
-            and (
-                latest_metrics["lower_wick_pct"] >= 30.0
-                or "BULLISH_ENGULFING" in reaction_tags
-                or "STRONG_BODY_BULLISH" in reaction_tags
-            )
+        micro_reference = max(_num(row.get("h")) for row in prior_micro)
+        micro_confirmed = (
+            close > micro_reference
+            and close > op
+            and latest_metrics["relative_strength"] >= 0.08
+            and latest_metrics["close_position"] >= 0.60
         )
-        micro_confirmed = micro_break or immediate_reaction
-        directional_close = close > op and close > level_price and latest_metrics["close_position"] >= 0.52
     else:
-        micro_break = bool(prior_micro) and close < min(_num(row.get("l")) for row in prior_micro)
-        immediate_reaction = (
-            reaction_index == len(one) - 1
-            and close < op and close < level_price
-            and (
-                latest_metrics["upper_wick_pct"] >= 30.0
-                or "BEARISH_ENGULFING" in reaction_tags
-                or "STRONG_BODY_BEARISH" in reaction_tags
-            )
+        micro_reference = min(_num(row.get("l")) for row in prior_micro)
+        micro_confirmed = (
+            close < micro_reference
+            and close < op
+            and latest_metrics["relative_strength"] >= 0.08
+            and latest_metrics["close_position"] <= 0.40
         )
-        micro_confirmed = micro_break or immediate_reaction
-        directional_close = close < op and close < level_price and latest_metrics["close_position"] <= 0.48
-
-    if not micro_confirmed or not directional_close:
-        return _waiting("WAITING_FOR_MICRO_CONFIRMATION", approach)
+    if not micro_confirmed:
+        return _waiting("WAITING_FOR_INVERSE_MICRO_STRUCTURE_BREAK", approach)
 
     entry = close
-    local_reaction = one[max(0, reaction_index - 1):]
-    stop_buffer = max(atr * 0.20, half_width * 0.10, entry * 0.00002)
+    stop_buffer = max(atr1 * 0.20, half_width * 0.10, entry * 0.00002)
     if side == "BUY":
-        rejection_swing = min(_num(row.get("l")) for row in local_reaction)
-        stop = rejection_swing - stop_buffer
+        stop = float(panic["panic_extreme"]) - stop_buffer
         risk = entry - stop
-        target = entry + MIN_RR * risk
         opposing = [
             item for item in active_levels
             if str(item.get("type", "")).upper() == "RESISTANCE"
@@ -368,11 +426,11 @@ def evaluate_level(
             if opposing_target - entry < MIN_RR * risk:
                 return _waiting("NEAREST_RESISTANCE_BLOCKS_1_TO_2_RR", approach)
             target = opposing_target
+        else:
+            target = entry + MIN_RR * risk
     else:
-        rejection_swing = max(_num(row.get("h")) for row in local_reaction)
-        stop = rejection_swing + stop_buffer
+        stop = float(panic["panic_extreme"]) + stop_buffer
         risk = stop - entry
-        target = entry - MIN_RR * risk
         opposing = [
             item for item in active_levels
             if str(item.get("type", "")).upper() == "SUPPORT"
@@ -384,20 +442,28 @@ def evaluate_level(
             if entry - opposing_target < MIN_RR * risk:
                 return _waiting("NEAREST_SUPPORT_BLOCKS_1_TO_2_RR", approach)
             target = opposing_target
+        else:
+            target = entry - MIN_RR * risk
 
-    if risk <= 0:
-        return _waiting("INVALID_STOP", approach)
+    if risk <= 0 or abs(target - entry) / risk < MIN_RR:
+        return _waiting("INVALID_RISK_REWARD", approach)
 
+    pattern_analysis = candle_patterns(one, len(one) - 1, level)
+    panic_tag = "PANIC_SWEEP_RECLAIM_BULLISH" if side == "BUY" else "PANIC_SWEEP_RECLAIM_BEARISH"
     return {
         "action": side,
-        "reason": "CONFIRMED",
+        "reason": "PANIC_CONFIRMED",
         "approach": approach,
         "entry": round(entry, 8),
         "stop_loss": round(stop, 8),
         "take_profit": round(target, 8),
         "risk_reward": round(abs(target - entry) / risk, 3),
         "signal_time": int(_num(latest.get("t"))),
-        "patterns": sorted(set(reaction_tags)),
+        "panic_time": int(panic["time"]),
+        "panic_extreme": round(float(panic["panic_extreme"]), 8),
+        "panic_range_atr": round(float(panic["range_atr"]), 3),
+        "panic_volume_ratio": round(float(panic["volume_ratio"]), 3),
+        "patterns": sorted(set(pattern_analysis["patterns"]) | {panic_tag}),
     }
 
 
