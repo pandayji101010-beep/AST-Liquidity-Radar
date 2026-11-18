@@ -1367,7 +1367,7 @@ _strategy_scanner_cache_lock: asyncio.Lock | None = None
 
 
 async def refresh_strategy_scanner_cache() -> dict[str, Any]:
-    """Refresh confirmed support/resistance levels for BTC and GOLD."""
+    """Refresh PANIC-confirmed HTF levels and separate live entry decisions for BTC and GOLD."""
     global _strategy_scanner_cache, _strategy_scanner_cache_lock
     if _strategy_scanner_cache_lock is None:
         _strategy_scanner_cache_lock = asyncio.Lock()
@@ -1670,7 +1670,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST High-Confidence Market Levels: historical reaction-tested support/resistance, merged across 1D/4H/1H/30M/15M.",
+        "strategy": "AST PANIC POINT: major 1H–1Y reference zones qualify only after a closed 5M abnormal-urgency sweep/reclaim and a subsequent inverse 1M/5M micro-structure break.",
         "strategy_engine": {
             "level_sources": "Closed 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
             "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",
@@ -1681,7 +1681,7 @@ async def config() -> dict[str, Any]:
         "minimum_risk_reward": 2.0,
         "level_timeframes": ["1H", "4H", "1D", "1W", "1M", "1Y"],
         "entry_timeframes": ["5M", "1M"],
-        "historical_reaction_probability": "Calculated from counted historical level tests and subsequent reactions; never assumed or guaranteed.",
+        "historical_reaction_probability": "Not displayed or assumed; level qualification is based on closed-candle PANIC protocol evidence and current retest state.",
 
 
         "price_mapping": "Rolling median ratio from direct Vantage MT5 tick / nearest Binance mark price",
