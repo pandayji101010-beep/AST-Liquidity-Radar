@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -308,71 +309,284 @@ def _pivot_candidate(
     }
 
 
-def _period_extreme_candidates(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Add completed week/month/year highs and lows when the origin candle shows rejection."""
+def _micro_shift_after_panic(event: dict[str, Any], data: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
+    """Confirm the first opposite-side micro swing break after a closed 5m panic candle."""
+    side = str(event.get("side", ""))
+    event_close = int(event.get("close_time", 0))
+    if side not in ("SUPPORT", "RESISTANCE") or event_close <= 0:
+        return None
+
+    # 1m is preferred; 5m is a supported fallback when the 1m archive is shorter.
+    for timeframe, max_bars in (("1m", 45), ("5m", 12)):
+        rows = data.get(timeframe) or []
+        if len(rows) < 8:
+            continue
+        timestamps = [int(row["t"]) for row in rows]
+        start_index = bisect_left(timestamps, event_close)
+        seed_end = min(len(rows), start_index + 4)
+        if seed_end - start_index < 3:
+            continue
+
+        seed = rows[start_index:seed_end]
+        if side == "SUPPORT":
+            micro_reference = max(_number(row.get("h")) for row in seed)
+        else:
+            micro_reference = min(_number(row.get("l")) for row in seed)
+
+        for index in range(seed_end, min(len(rows), start_index + max_bars)):
+            row = rows[index]
+            atr = _atr(rows, index)
+            if atr <= 0:
+                continue
+            op, high, low, close = (_number(row.get(key)) for key in ("o", "h", "l", "c"))
+            span = max(high - low, 1e-12)
+            body = abs(close - op)
+            close_position = (close - low) / span
+            min_body = max(atr * 0.06, abs(close) * 0.00001)
+            if side == "SUPPORT":
+                confirmed = close > micro_reference and close > op and body >= min_body and close_position >= 0.56
+            else:
+                confirmed = close < micro_reference and close < op and body >= min_body and close_position <= 0.44
+            if confirmed:
+                return {
+                    "micro_shift_timeframe": timeframe,
+                    "micro_shift_time": int(row["t"]),
+                    "micro_shift_price": close,
+                }
+    return None
+
+
+def _panic_event_candidates(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Find closed 5m urgency candles with a rejection wick and a later micro-structure shift."""
+    candles = data.get("5m") or []
+    if len(candles) < 35:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for index in range(20, len(candles)):
+        row = candles[index]
+        atr = _atr(candles, index - 1)
+        if atr <= 0:
+            continue
+
+        op, high, low, close = (_number(row.get(key)) for key in ("o", "h", "l", "c"))
+        span = max(high - low, 1e-12)
+        range_atr = span / atr
+        if range_atr < 1.35:
+            continue
+
+        upper_wick = high - max(op, close)
+        lower_wick = min(op, close) - low
+        close_position = (close - low) / span
+        volume_ratio = _volume_ratio(candles, index)
+
+        side = None
+        wick_ratio = 0.0
+        if lower_wick / span >= 0.18 and close_position >= 0.58:
+            side = "SUPPORT"
+            wick_ratio = lower_wick / span
+        elif upper_wick / span >= 0.18 and close_position <= 0.42:
+            side = "RESISTANCE"
+            wick_ratio = upper_wick / span
+        if side is None:
+            continue
+
+        event = {
+            "side": side,
+            "time": int(row["t"]),
+            "close_time": int(row["t"]) + TIMEFRAME_MS["5m"],
+            "index": index,
+            "low": low,
+            "high": high,
+            "close": close,
+            "close_position": close_position,
+            "atr": atr,
+            "range_atr": range_atr,
+            "wick_ratio": wick_ratio,
+            "volume_ratio": volume_ratio,
+        }
+        shift = _micro_shift_after_panic(event, data)
+        if shift is None:
+            continue
+        event.update(shift)
+        events.append(event)
+
+    return events
+
+
+def _panic_reference_candidate(
+    candles: list[dict[str, Any]],
+    timeframe: str,
+    index: int,
+    side: str,
+    price: float,
+    atr: float,
+    panic_events: list[dict[str, Any]],
+    data: dict[str, list[dict[str, Any]]],
+    liquidity_pool: bool = False,
+    origin_kind: str = "SWING",
+    period_age: int = 0,
+) -> dict[str, Any] | None:
+    """Keep a major HTF reference only after panic sweep, reclaim and micro-shift confirmation."""
+    if atr <= 0 or price <= 0 or index >= len(candles) - 2:
+        return None
+
+    half_width = max(price * 0.00012, min(atr * 0.16, price * 0.0035))
+    lower, upper = price - half_width, price + half_width
+    origin = candles[index]
+    origin_close = _calendar_close_ms(int(origin["t"]), timeframe)
+
+    five = data.get("5m") or []
+    five_times = [int(row["t"]) for row in five]
+    pending_age = 12
+    freshness_span = {"1h": 1_500, "4h": 900, "1d": 900, "1w": 208, "1mo": 96, "1y": 10}.get(timeframe, 180)
+    age = max(0, len(candles) - 1 - index)
+    freshness = max(0.0, 1.0 - age / freshness_span)
+    if freshness < 0.05:
+        return None
+
+    # A panic event must occur after this HTF level was fully formed.
+    for event in reversed(panic_events):
+        if event["side"] != side or int(event["time"]) <= origin_close:
+            continue
+
+        sweep_distance = (
+            lower - float(event["low"])
+            if side == "SUPPORT"
+            else float(event["high"]) - upper
+        )
+        min_sweep = max(float(event["atr"]) * 0.04, price * 0.00002)
+        if sweep_distance < min_sweep:
+            continue
+        if side == "SUPPORT":
+            if float(event["close"]) <= price or float(event["close_position"]) < 0.58:
+                continue
+        elif float(event["close"]) >= price or float(event["close_position"]) > 0.42:
+            continue
+
+        # More than one earlier test means the level has already been worked.
+        prior_rows = []
+        for row in candles[index + 1:]:
+            row_close = _calendar_close_ms(int(row["t"]), timeframe)
+            if row_close <= int(event["time"]):
+                prior_rows.append(row)
+        prior_tests = len(_return_events(prior_rows, 0, price, half_width))
+        if prior_tests > 1:
+            continue
+
+        event_index = int(event["index"])
+        if event_index < 0 or event_index >= len(five):
+            continue
+        # A close-and-hold beyond the far side invalidates the failed-breakout thesis.
+        if _is_broken_after(five, event_index, side, lower, upper):
+            continue
+
+        shift_index = bisect_left(five_times, int(event["micro_shift_time"]))
+        departure_index = None
+        for cursor in range(max(event_index + 1, shift_index), len(five)):
+            departure_atr = _atr(five, cursor)
+            if departure_atr <= 0:
+                continue
+            departure_distance = max(departure_atr * 0.65, half_width * 2.5)
+            excursion = (
+                _number(five[cursor].get("h")) - price
+                if side == "SUPPORT"
+                else price - _number(five[cursor].get("l"))
+            )
+            if excursion >= departure_distance:
+                departure_index = cursor
+                break
+        if departure_index is None:
+            continue
+
+        retests = _return_events(five, departure_index + 1, price, half_width)
+        if len(retests) > 1:
+            continue
+        if retests and len(five) - 1 - retests[0] > pending_age:
+            continue
+        if _is_broken_after(five, departure_index, side, lower, upper):
+            continue
+
+        touch_index = retests[0] if retests else None
+        panic_extreme = float(event["low"] if side == "SUPPORT" else event["high"])
+        return {
+            "side": side,
+            "price": price,
+            "half_width": half_width,
+            "timeframe": timeframe,
+            "touches": 1 if touch_index is not None else 0,
+            "reactions": 0,
+            "touch_state": "FIRST_TOUCH" if touch_index is not None else "UNTESTED",
+            "first_touch_time": int(five[touch_index]["t"]) if touch_index is not None else None,
+            "last_touch_time": int(five[touch_index]["t"]) if touch_index is not None else int(origin["t"]),
+            "freshness": max(0.0, freshness - prior_tests * 0.08),
+            "impulse_atr": max(float(event["range_atr"]), float(event.get("range_atr", 0.0))),
+            "wick_ratio": float(event["wick_ratio"]),
+            "volume_ratio": float(event["volume_ratio"]),
+            "liquidity_pool": liquidity_pool,
+            "origin_time": int(origin["t"]),
+            "origin_kind": "PANIC_SWEEP" if origin_kind == "SWING" else origin_kind,
+            "panic_confirmed": True,
+            "panic_time": int(event["time"]),
+            "panic_extreme": panic_extreme,
+            "panic_range_atr": round(float(event["range_atr"]), 3),
+            "panic_sweep_atr": round(sweep_distance / max(float(event["atr"]), 1e-12), 3),
+            "panic_volume_ratio": round(float(event["volume_ratio"]), 3),
+            "micro_shift_timeframe": str(event["micro_shift_timeframe"]),
+            "micro_shift_time": int(event["micro_shift_time"]),
+            "prior_tests": prior_tests,
+            "period_age": period_age,
+        }
+    return None
+
+
+def _period_extreme_candidates(
+    data: dict[str, list[dict[str, Any]]],
+    panic_events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Treat completed weekly/monthly/yearly extremes as HTF levels only after a PANIC response."""
     candidates: list[dict[str, Any]] = []
     daily = data.get("1d") or []
     if len(daily) < 20:
         return candidates
+    panic_events = panic_events if panic_events is not None else _panic_event_candidates(data)
+    daily_atr = _atr(daily)
+    if daily_atr <= 0:
+        return candidates
+
     for timeframe, max_periods in (("1w", 20), ("1mo", 24), ("1y", 10)):
         periods = data.get(timeframe) or []
         if len(periods) < 2:
             continue
-        daily_atr = _atr(daily)
         fallback = daily_atr * {"1w": 4.5, "1mo": 18.0, "1y": 180.0}[timeframe]
         for index in range(max(0, len(periods) - max_periods), len(periods)):
             candle = periods[index]
             atr = _atr(periods, index) or fallback
             if atr <= 0:
                 continue
-            op, high, low, close = (_number(candle.get(key)) for key in ("o", "h", "l", "c"))
-            span = max(high - low, 1e-12)
-            upper_wick, lower_wick = high - max(op, close), min(op, close) - low
-            close_position = (close - low) / span
-            period_close = _calendar_close_ms(int(candle["t"]), timeframe)
-            first_daily = next((i for i, row in enumerate(daily) if int(row["t"]) >= period_close), len(daily))
-            for side, price, wick, reversal_distance in (
-                ("RESISTANCE", high, upper_wick, high - close),
-                ("SUPPORT", low, lower_wick, close - low),
+            for side, price in (
+                ("RESISTANCE", _number(candle.get("h"))),
+                ("SUPPORT", _number(candle.get("l"))),
             ):
-                wick_ratio = wick / span
-                if wick_ratio < 0.18 and reversal_distance < atr * 0.35:
-                    continue
-                if side == "RESISTANCE" and close_position > 0.52:
-                    continue
-                if side == "SUPPORT" and close_position < 0.48:
-                    continue
-                half_width = max(price * 0.00012, min(atr * 0.10, price * 0.0035))
-                lower, upper = price - half_width, price + half_width
-                events = _return_events(daily, first_daily, price, half_width)
-                if len(events) > 1:
-                    continue
-                touch_age = len(daily) - 1 - events[0] if events else 0
-                if events and touch_age > 5:
-                    continue
-                if _is_broken_after(daily, first_daily, side, lower, upper):
-                    continue
-                period_age = max(0, len(periods) - 1 - index)
-                freshness = max(0.0, 1.0 - period_age / {"1w": 156, "1mo": 72, "1y": 10}[timeframe])
-                if freshness < 0.05:
-                    continue
-                candidates.append({
-                    "side": side, "price": price, "half_width": half_width, "timeframe": timeframe,
-                    "touches": 1 if events else 0, "reactions": 0,
-                    "touch_state": "FIRST_TOUCH" if events else "UNTESTED",
-                    "first_touch_time": int(daily[events[0]]["t"]) if events else None,
-                    "last_touch_time": int(daily[events[0]]["t"]) if events else int(candle["t"]),
-                    "freshness": freshness, "impulse_atr": max(0.35, reversal_distance / atr),
-                    "wick_ratio": wick_ratio, "volume_ratio": _volume_ratio(periods, index),
-                    "liquidity_pool": False, "origin_time": int(candle["t"]),
-                    "origin_kind": "PERIOD_EXTREME", "period_age": period_age,
-                })
+                candidate = _panic_reference_candidate(
+                    periods, timeframe, index, side, price, atr, panic_events, data,
+                    liquidity_pool=False, origin_kind="PERIOD_EXTREME",
+                    period_age=max(0, len(periods) - 1 - index),
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
     return candidates
 
 
-def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _candidate_levels(
+    data: dict[str, list[dict[str, Any]]],
+    panic_events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build only major 1H–1Y pivots that later produced a PANIC sweep/reclaim and micro BOS."""
     candidates: list[dict[str, Any]] = []
+    panic_events = panic_events if panic_events is not None else _panic_event_candidates(data)
     minimum_bars = {"1h": 48, "4h": 32, "1d": 32, "1w": 12, "1mo": 8, "1y": 5}
+
     for timeframe in ANALYSIS_TFS:
         candles = data.get(timeframe) or []
         if len(candles) < minimum_bars[timeframe]:
@@ -381,6 +595,7 @@ def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
         pivots = [("RESISTANCE", index, price) for index, price in pivot_highs]
         pivots.extend(("SUPPORT", index, price) for index, price in pivot_lows)
         pivots.sort(key=lambda item: item[1])
+
         for side, index, price in pivots[-MAX_PIVOTS_PER_TF:]:
             atr = _atr(candles, index)
             if atr <= 0:
@@ -391,10 +606,14 @@ def _candidate_levels(data: dict[str, list[dict[str, Any]]]) -> list[dict[str, A
                 1 for other_index, other_price in same_side[-120:]
                 if other_index != index and abs(float(other_price) - price) <= tolerance
             ) >= 1
-            candidate = _pivot_candidate(candles, timeframe, index, side, float(price), liquidity_pool)
+            candidate = _panic_reference_candidate(
+                candles, timeframe, index, side, float(price), atr, panic_events, data,
+                liquidity_pool=liquidity_pool, origin_kind="SWING",
+            )
             if candidate is not None:
                 candidates.append(candidate)
-    candidates.extend(_period_extreme_candidates(data))
+
+    candidates.extend(_period_extreme_candidates(data, panic_events))
     return candidates
 
 
@@ -437,13 +656,26 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
         touches = max(int(item.get("touches", 0)) for item in group)
         touch_state = "FIRST_TOUCH" if touches else "UNTESTED"
 
+        panic_range_atr = max(float(item.get("panic_range_atr", 0.0)) for item in group)
+        panic_sweep_atr = max(float(item.get("panic_sweep_atr", 0.0)) for item in group)
+        panic_volume_ratio = max(float(item.get("panic_volume_ratio", 1.0)) for item in group)
+        panic_time = max(int(item.get("panic_time", 0)) for item in group)
+        panic_extreme_item = max(
+            group,
+            key=lambda item: float(item.get("panic_range_atr", 0.0)) + float(item.get("panic_sweep_atr", 0.0)),
+        )
+        micro_tfs = {str(item.get("micro_shift_timeframe", "")) for item in group}
         score = (
-            25.0 + (max_tf_weight - 3.0) * 3.0
+            22.0 + (max_tf_weight - 3.0) * 3.0
             + min(max(len(source_tfs) - 1, 0) * 7.0, 21.0)
-            + 20.0 * min(max_impulse / 2.5, 1.0)
-            + 10.0 * min(max_wick / 0.45, 1.0)
+            + 12.0 * min(max_impulse / 2.5, 1.0)
+            + 8.0 * min(max_wick / 0.45, 1.0)
+            + 7.0 * min(panic_range_atr / 2.2, 1.0)
+            + 7.0 * min(panic_sweep_atr / 0.45, 1.0)
+            + 4.0 * min(max(panic_volume_ratio - 1.0, 0.0) / 1.5, 1.0)
             + 5.0 * min(max(volume_ratio - 1.0, 0.0) / 1.5, 1.0)
             + (5.0 if liquidity else 0.0)
+            + (3.0 if "1m" in micro_tfs else 1.5)
             + 8.0 * freshness
             + (6.0 if touches == 0 else 3.0)
         )
@@ -466,7 +698,15 @@ def _merge_levels(candidates: list[dict[str, Any]], data: dict[str, list[dict[st
             "origin_time": max(int(item.get("origin_time", 0)) for item in group),
             "departure_atr": round(max_impulse, 2),
             "volume_ratio": round(volume_ratio, 3),
-            "origin_kinds": sorted({str(item.get("origin_kind", "SWING")) for item in group}),
+            "panic_confirmed": True,
+            "panic_range_atr": round(panic_range_atr, 3),
+            "panic_sweep_atr": round(panic_sweep_atr, 3),
+            "panic_volume_ratio": round(panic_volume_ratio, 3),
+            "panic_time": panic_time,
+            "panic_extreme": float(panic_extreme_item.get("panic_extreme", price)),
+            "micro_shift_timeframe": str(panic_extreme_item.get("micro_shift_timeframe", "5m")),
+            "micro_shift_time": int(panic_extreme_item.get("micro_shift_time", 0)),
+            "origin_kinds": sorted({str(item.get("origin_kind", "PANIC_SWEEP")) for item in group}),
         }
         if _decisively_broken(level, data):
             continue
@@ -721,7 +961,8 @@ class HighConfidenceMarketLevelsEngine:
         return tuple(result)
 
     def _refresh_levels(self, data: dict[str, list[dict[str, Any]]]) -> None:
-        candidates = _candidate_levels(data)
+        panic_events = _panic_event_candidates(data)
+        candidates = _candidate_levels(data, panic_events)
         self._levels_cache = _merge_levels(candidates, data)
         self._bias_cache = _higher_timeframe_bias(data)
         self._signature = self._data_signature(data)
