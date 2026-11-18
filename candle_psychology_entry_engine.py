@@ -364,14 +364,14 @@ def evaluate_level(
 
     approach = _approach(one, zone_low, zone_high)
     expected_approach = "FROM_ABOVE" if side == "BUY" else "FROM_BELOW"
-    if approach not in (expected_approach, "INSIDE_ZONE"):
-        return _waiting("APPROACH_SIDE_MISMATCH", approach)
 
     last_two = one[-2:]
     if side == "BUY" and all(_num(row.get("c")) < zone_low for row in last_two):
         return _waiting("SUPPORT_BROKEN", approach)
     if side == "SELL" and all(_num(row.get("c")) > zone_high for row in last_two):
         return _waiting("RESISTANCE_BROKEN", approach)
+    if approach not in (expected_approach, "INSIDE_ZONE"):
+        return _waiting("APPROACH_SIDE_MISMATCH", approach)
 
     panic = _panic_sweep_candidate(five, level, side)
     if panic is None:
