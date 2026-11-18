@@ -28,14 +28,28 @@ SUPPORT = {
 
 
 def bullish_setup():
-    start = END_TIME - 15 * 60_000
-    rows = [
-        candle(start + index * 60_000, 100.45, 100.75, 100.30, 100.60)
-        for index in range(14)
+    level = SUPPORT.copy()
+    event_start = END_TIME - 9 * 60_000
+    five = [
+        candle(event_start - (19 - index) * 5 * 60_000, 100.65, 100.95, 100.35, 100.70)
+        for index in range(19)
     ]
-    # Last closed 1m candle sweeps below support and closes back above it.
-    rows.append(candle(END_TIME - 60_000, 100.40, 100.55, 99.30, 100.50))
-    return SUPPORT.copy(), {"1m": rows}, 100.50
+    # Abnormal 5m selling extension sweeps support and closes back above it.
+    five.append(candle(event_start, 100.60, 100.80, 99.20, 100.55, 220.0))
+
+    event_close = event_start + 5 * 60_000
+    rows = [
+        candle(event_close - (11 - index) * 60_000, 100.45, 100.75, 100.30, 100.60)
+        for index in range(11)
+    ]
+    # Four closed 1m bars after the 5m event; the last one breaks the micro swing high.
+    rows.extend([
+        candle(event_close, 100.55, 100.80, 100.45, 100.65),
+        candle(event_close + 60_000, 100.65, 100.90, 100.55, 100.72),
+        candle(event_close + 120_000, 100.72, 100.85, 100.62, 100.68),
+        candle(event_close + 180_000, 100.75, 101.25, 100.70, 101.20),
+    ])
+    return level, {"1m": rows, "5m": five}, 101.20
 
 
 def bearish_setup():
@@ -47,14 +61,27 @@ def bearish_setup():
         "half_width": 0.2,
         "strength_score": 80,
     }
-    start = END_TIME - 15 * 60_000
-    rows = [
-        candle(start + index * 60_000, 99.55, 99.70, 99.25, 99.40)
-        for index in range(14)
+    event_start = END_TIME - 9 * 60_000
+    five = [
+        candle(event_start - (19 - index) * 5 * 60_000, 99.55, 99.85, 99.25, 99.50)
+        for index in range(19)
     ]
-    # Last closed 1m candle sweeps above resistance and closes back below.
-    rows.append(candle(END_TIME - 60_000, 100.10, 101.20, 99.95, 99.90))
-    return level, {"1m": rows}, 99.90
+    # Abnormal 5m buying extension sweeps resistance and closes back below it.
+    five.append(candle(event_start, 99.60, 100.80, 99.25, 99.45, 220.0))
+
+    event_close = event_start + 5 * 60_000
+    rows = [
+        candle(event_close - (11 - index) * 60_000, 99.55, 99.70, 99.25, 99.40)
+        for index in range(11)
+    ]
+    # Four closed 1m bars after the 5m event; the last one breaks the micro swing low.
+    rows.extend([
+        candle(event_close, 99.45, 99.65, 99.10, 99.30),
+        candle(event_close + 60_000, 99.30, 99.50, 99.05, 99.20),
+        candle(event_close + 120_000, 99.20, 99.40, 99.10, 99.25),
+        candle(event_close + 180_000, 99.15, 99.20, 98.70, 98.80),
+    ])
+    return level, {"1m": rows, "5m": five}, 98.80
 
 
 class CandlePsychologyEntryEngineTests(unittest.TestCase):
@@ -96,9 +123,9 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         original = dict(level)
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "BUY")
-        self.assertEqual(result["reason"], "CONFIRMED")
+        self.assertEqual(result["reason"], "PANIC_CONFIRMED")
         self.assertEqual(result["approach"], "FROM_ABOVE")
-        self.assertIn("LIQUIDITY_SWEEP_RECLAIM_BULLISH", result["patterns"])
+        self.assertIn("PANIC_SWEEP_RECLAIM_BULLISH", result["patterns"])
         self.assertGreaterEqual(result["risk_reward"], 2.0)
         self.assertLess(result["stop_loss"], result["entry"])
         self.assertGreater(result["take_profit"], result["entry"])
@@ -108,25 +135,28 @@ class CandlePsychologyEntryEngineTests(unittest.TestCase):
         level, data, price = bearish_setup()
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "SELL")
-        self.assertEqual(result["reason"], "CONFIRMED")
+        self.assertEqual(result["reason"], "PANIC_CONFIRMED")
         self.assertEqual(result["approach"], "FROM_BELOW")
-        self.assertIn("LIQUIDITY_SWEEP_RECLAIM_BEARISH", result["patterns"])
+        self.assertIn("PANIC_SWEEP_RECLAIM_BEARISH", result["patterns"])
         self.assertGreaterEqual(result["risk_reward"], 2.0)
         self.assertGreater(result["stop_loss"], result["entry"])
         self.assertLess(result["take_profit"], result["entry"])
 
     def test_level_touch_without_rejection_stays_waiting(self):
         level, data, price = bullish_setup()
-        data["1m"][-1] = candle(END_TIME - 60_000, 100.4, 100.55, 99.9, 100.0)
+        event = data["5m"][-1]
+        data["5m"][-1] = candle(event["t"], 100.4, 100.55, 99.9, 100.0, event["v"])
         result = evaluate_level(level, [level], data, price, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
-        self.assertEqual(result["reason"], "WAITING_FOR_CANDLE_REACTION")
+        self.assertEqual(result["reason"], "WAITING_FOR_PANIC_URGENCY_SWEEP_RECLAIM")
 
     def test_support_approached_from_below_does_not_give_buy(self):
         level, data, _price = bullish_setup()
-        data["1m"][-2] = candle(END_TIME - 120_000, 99.6, 99.7, 99.4, 99.5)
-        data["1m"][-1] = candle(END_TIME - 60_000, 99.5, 100.1, 99.2, 100.05)
-        result = evaluate_level(level, [level], data, 100.05, as_of_ms=END_TIME)
+        timestamp = data["1m"][-6]["t"]
+        data["1m"][-6] = candle(timestamp, 99.6, 99.7, 99.4, 99.5)
+        timestamp = data["1m"][-5]["t"]
+        data["1m"][-5] = candle(timestamp, 99.6, 100.1, 99.4, 99.5)
+        result = evaluate_level(level, [level], data, 101.20, as_of_ms=END_TIME)
         self.assertEqual(result["action"], "WAITING")
         self.assertEqual(result["reason"], "APPROACH_SIDE_MISMATCH")
 
