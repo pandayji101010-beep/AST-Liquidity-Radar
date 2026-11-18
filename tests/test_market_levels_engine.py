@@ -53,9 +53,13 @@ def panic_event_fixture():
 
     event_close = event_time + 5 * 60_000
     one_minute = [
+        candle(event_close - (11 - index) * 60_000, 100.5, 100.75, 100.4, 100.6, 10.0)
+        for index in range(11)
+    ]
+    one_minute.extend([
         candle(event_close + index * 60_000, 100.5, 100.75 + index * 0.02, 100.4, 100.6, 10.0)
         for index in range(4)
-    ]
+    ])
     one_minute.append(candle(event_close + 4 * 60_000, 100.75, 101.3, 100.7, 101.2, 20.0))
 
     hourly = []
