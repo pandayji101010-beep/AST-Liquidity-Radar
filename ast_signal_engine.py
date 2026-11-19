@@ -204,7 +204,7 @@ def _adaptive_stop(
         return None
 
     distance = max(structure_distance, atr * 1.5)
-    max_distance = atr * 4.0
+    max_distance = atr * 6.0
     if distance > max_distance:
         return None
 
@@ -370,7 +370,7 @@ class ASTOneMinuteSignalEngine:
                 if stop_plan is None:
                     if memory.get("active") is None:
                         memory["last_note"] = (
-                            "WAIT · structure stop is invalid or wider than 4 ATR"
+                            "WAIT · structure stop is invalid or wider than 6 ATR"
                         )
                 else:
                     stop_pips = int(stop_plan["sl_pips"])

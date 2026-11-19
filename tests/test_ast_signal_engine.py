@@ -112,7 +112,7 @@ class ASTSignalEngineTests(unittest.TestCase):
         self.assertGreater(plan["stop_loss"], max(row["h"] for row in rows[-6:-1]))
         self.assertGreaterEqual(plan["sl_atr_multiple"], 1.5)
 
-    def test_structure_stop_wider_than_four_atr_is_rejected(self):
+    def test_structure_stop_wider_than_six_atr_is_rejected(self):
         rows = [
             {"t": i, "o": 1000.0, "h": 1100.0, "l": 800.0, "c": 1000.0, "v": 1.0}
             for i in range(8)
