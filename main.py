@@ -1681,7 +1681,7 @@ async def config() -> dict[str, Any]:
         "symbols": SYMBOLS,
         "timeframes": TIMEFRAMES,
         "historical_bars_per_timeframe": HISTORY_BARS,
-        "strategy": "AST One-Minute Trend Decision: completed 1m sweep/reclaim, doji break, displacement or engulfing setup, gated by weighted 5m–1d Binance trend alignment.",
+        "strategy": "AST One-Minute Trend Decision: 1m local sweep, micro-break, doji/pause break, EMA pullback reclaim and engulfing; filtered by Binance timeframe trend and estimated 85+ pip move-space.",
         "strategy_engine": {
             "level_sources": "Closed 5M, 15M, 30M, 1H, 4H, 1D, 1W, 1M and 1Y swing/period reference levels matched to abnormal 5M range expansion, a sweep-and-reclaim, and a later inverse 1M/5M micro swing break.",
             "level_validation": "Only panic-confirmed, unbroken levels with no more than one pre-event test and an untested or current first post-confirmation retest are displayed.",
@@ -1689,11 +1689,11 @@ async def config() -> dict[str, Any]:
             "risk_management": "Stop beyond the actual panic extreme plus a volatility buffer; BUY/SELL is blocked unless the nearest valid liquidity target supports at least 1:2 risk/reward.",
             "display": "Existing dashboard format is unchanged: rank, support/resistance, exact price, source timeframe, distance, strength score, and BUY/SELL/WAITING status.",
         },
-        "minimum_risk_reward": 2.0,
+        "minimum_risk_reward": 1.8,
         "scan_interval_ms": 100,
-        "stop_loss": "Adaptive fixed 30 or 50 pips; BTC pip=$1, GOLD pip=$0.10 display convention. No signal when 1m ATR exceeds 50 pips.",
+        "stop_loss": "Adaptive fixed 30 or 50 pips; target is at least 90 pips; BTC pip=$1, GOLD pip=$0.01 calculation convention. No signal when estimated 1m move-space is below 85 pips or ATR exceeds 80 pips.",
         "level_timeframes": ["5M", "15M", "30M", "1H", "4H", "1D", "1W", "1M", "1Y"],
-        "entry_timeframes": ["5M", "1M"],
+        "entry_timeframes": ["1M"],
         "historical_reaction_probability": "Not displayed or assumed; level qualification is based on closed-candle PANIC protocol evidence and current retest state.",
 
 

@@ -69,13 +69,13 @@ h1{font-size:18px;line-height:1.2;margin:0;letter-spacing:.04em}
       <div class="levels">
         <div class="level entry"><div class="k">Entry</div><div class="v" id="entryBTC">—</div></div>
         <div class="level stop"><div class="k">Stop loss</div><div class="v" id="slBTC">—</div></div>
-        <div class="level target"><div class="k">Target · 2R</div><div class="v" id="tpBTC">—</div></div>
+        <div class="level target"><div class="k">Target · 90+ pips</div><div class="v" id="tpBTC">—</div></div>
       </div>
       <div class="context"><div class="context-title">HISTORY · PRESENT · NEXT SCENARIO</div><div class="biases">
         <div class="bias">Historical<b id="histBTC">—</b></div><div class="bias">Present trend<b id="presentBTC">—</b></div><div class="bias">Projection<b id="futureBTC">—</b></div>
       </div></div>
       <div class="reason" id="reasonBTC">Waiting for completed 1m candles and trend alignment.</div>
-      <div class="meta"><span id="alignBTC">Trend alignment: —</span><span id="slpipsBTC">SL: —</span></div>
+      <div class="meta"><span id="alignBTC">85-pip move filter: —</span><span id="slpipsBTC">SL: —</span></div>
     </article>
 
     <article class="card" id="cardGOLD">
@@ -96,7 +96,7 @@ h1{font-size:18px;line-height:1.2;margin:0;letter-spacing:.04em}
   </main>
 
   <div class="footer">
-    Signal-only dashboard: it does not place orders. A BUY/SELL is confirmed only after a 1-minute candle closes and higher-timeframe Binance trend agrees. The button keeps the latest confirmed direction and flips only on a confirmed opposite setup. Stops are fixed at 30 or 50 pips; BTC uses $1 per pip and Gold uses $0.10 per pip as a display convention. Gold pip definitions can vary by broker. “Next scenario” is an ATR-based range, not knowledge of the future or a guaranteed forecast. No signal is forced when the data is stale or volatility makes the fixed stop unsuitable.
+    Signal-only dashboard: it does not place orders. A BUY/SELL is confirmed only after a 1-minute candle closes and Binance trend context agrees or the local 1m trend is sufficiently strong. The button keeps the latest confirmed direction and flips only on a confirmed opposite setup. Stops are fixed at 30 or 50 pips; a signal needs at least 85 pips of estimated move-space and uses a 90+ pip target. This dashboard uses BTC $1 per pip and XAUUSDT $0.01 per pip as calculation conventions; confirm the Gold pip size with your broker. “Next scenario” is an ATR-based range, not knowledge of the future or a guaranteed forecast. No signal is forced when the data is stale or volatility makes the fixed stop unsuitable.
   </div>
 </div>
 <script>
@@ -130,8 +130,8 @@ function renderAsset(key,data){
   $('present'+key).textContent=present[0];$('present'+key).className=present[1];
   $('future'+key).textContent=future[0];$('future'+key).className=future[1];
   $('reason'+key).textContent=data.reason||'Waiting for a confirmed 1m setup.';
-  $('align'+key).textContent='Trend alignment: '+fmt(data.trend_alignment_pct,0)+'%';
-  $('slpips'+key).textContent=data.sl_pips?'SL: '+data.sl_pips+' pips · '+fmt(data.sl_price_distance,digits)+' price':'SL: —';
+  $('align'+key).textContent='Trend: '+fmt(data.trend_alignment_pct,0)+'%';
+  $('slpips'+key).textContent='SL: '+(data.sl_pips?data.sl_pips+' pips':'—')+' · Target: '+(data.target_pips?fmt(data.target_pips,0)+' pips':'—')+' · Move-space: '+fmt(data.move_potential_pips,0)+' pips';
 }
 function renderPayload(payload){
   for(const asset of payload?.assets||[]) renderAsset(asset.asset,asset);
