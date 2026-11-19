@@ -169,6 +169,58 @@ def _setup(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+
+def _adaptive_stop(
+    rows: list[dict[str, Any]],
+    side: str,
+    entry: float,
+    atr: float,
+    pip_size: float,
+) -> dict[str, Any] | None:
+    """Place SL beyond recent 1m structure with an ATR noise buffer.
+
+    Uses the five closed candles before the trigger candle. The stop is never
+    closer than 1.5 ATR, is rounded away from entry to a whole display pip,
+    and is rejected rather than forced if structure requires more than 4 ATR.
+    """
+    if len(rows) < 8 or entry <= 0 or atr <= 0 or pip_size <= 0:
+        return None
+
+    structure_rows = rows[-6:-1]
+    if len(structure_rows) < 5:
+        return None
+
+    buffer = max(atr * 0.35, pip_size * 2.0)
+    if side == "BUY":
+        swing = min(_num(row.get("l")) for row in structure_rows)
+        structure_distance = entry - (swing - buffer)
+    elif side == "SELL":
+        swing = max(_num(row.get("h")) for row in structure_rows)
+        structure_distance = (swing + buffer) - entry
+    else:
+        return None
+
+    if structure_distance <= 0:
+        return None
+
+    distance = max(structure_distance, atr * 1.5)
+    max_distance = atr * 4.0
+    if distance > max_distance:
+        return None
+
+    # Round the stop distance away from entry so price precision never tightens it.
+    distance_pips = math.ceil((distance / pip_size) - 1e-12)
+    rounded_distance = distance_pips * pip_size
+    stop = entry - rounded_distance if side == "BUY" else entry + rounded_distance
+    return {
+        "stop_loss": round(stop, 8),
+        "sl_pips": int(distance_pips),
+        "sl_price_distance": round(rounded_distance, 8),
+        "sl_atr_multiple": round(rounded_distance / atr, 2),
+        "sl_method": "5-bar swing + 0.35 ATR buffer; minimum 1.5 ATR",
+    }
+
+
 def _move_potential_pips(rows: list[dict[str, Any]], pip_size: float) -> float:
     """Simple volatility/range-based opportunity filter, not a guaranteed forecast."""
     if len(rows) < 15 or pip_size <= 0:
@@ -311,36 +363,39 @@ class ASTOneMinuteSignalEngine:
                         f"WAIT · estimated move-space {move_potential_pips:.0f} pips; "
                         f"minimum is {MIN_MOVE_POTENTIAL_PIPS:.0f}"
                     )
-            elif atr_pips > 80.0:
-                if memory.get("active") is None:
-                    memory["last_note"] = (
-                        f"WAIT · 1m ATR is {atr_pips:.0f} pips; fixed 30/50-pip SL is too tight"
-                    )
             else:
                 side = candidate["side"]
-                stop_pips = 50 if atr_pips >= 25.0 else 30
-                target_pips = max(MIN_TARGET_PIPS, stop_pips * 1.8)
-                distance = stop_pips * pip_size
-                target_distance = target_pips * pip_size
                 entry = _num(latest.get("c"))
-                stop = entry - distance if side == "BUY" else entry + distance
-                target = entry + target_distance if side == "BUY" else entry - target_distance
-                reason = (
-                    f"{candidate['reason']} · trend {alignment:.0f}% · "
-                    f"move-space {move_potential_pips:.0f} pips"
-                )
-                memory["active"] = {
-                    "side": side, "entry": round(entry, 8),
-                    "stop_loss": round(stop, 8), "take_profit": round(target, 8),
-                    "sl_pips": stop_pips, "target_pips": round(target_pips, 1),
-                    "sl_price_distance": round(distance, 8),
-                    "target_price_distance": round(target_distance, 8),
-                    "pip_size": pip_size, "risk_reward": round(target_pips / stop_pips, 2),
-                    "move_potential_pips": round(move_potential_pips, 1),
-                    "signal_time": latest_time, "reason": reason,
-                }
-                memory["last_note"] = reason
-                active = memory["active"]
+                stop_plan = _adaptive_stop(one[-120:], side, entry, atr, pip_size)
+                if stop_plan is None:
+                    if memory.get("active") is None:
+                        memory["last_note"] = (
+                            "WAIT · structure stop is invalid or wider than 4 ATR"
+                        )
+                else:
+                    stop_pips = int(stop_plan["sl_pips"])
+                    target_pips = max(MIN_TARGET_PIPS, stop_pips * 1.5)
+                    target_distance = target_pips * pip_size
+                    target = entry + target_distance if side == "BUY" else entry - target_distance
+                    reason = (
+                        f"{candidate['reason']} · trend {alignment:.0f}% · "
+                        f"move-space {move_potential_pips:.0f} pips · "
+                        f"structure SL {stop_pips} pips"
+                    )
+                    memory["active"] = {
+                        "side": side, "entry": round(entry, 8),
+                        "stop_loss": stop_plan["stop_loss"], "take_profit": round(target, 8),
+                        "sl_pips": stop_pips, "target_pips": round(target_pips, 1),
+                        "sl_price_distance": stop_plan["sl_price_distance"],
+                        "target_price_distance": round(target_distance, 8),
+                        "sl_atr_multiple": stop_plan["sl_atr_multiple"],
+                        "sl_method": stop_plan["sl_method"],
+                        "pip_size": pip_size, "risk_reward": round(target_pips / stop_pips, 2),
+                        "move_potential_pips": round(move_potential_pips, 1),
+                        "signal_time": latest_time, "reason": reason,
+                    }
+                    memory["last_note"] = reason
+                    active = memory["active"]
 
         active = memory.get("active")
         return {
@@ -352,6 +407,8 @@ class ASTOneMinuteSignalEngine:
             "stop_loss": active.get("stop_loss") if active else None,
             "take_profit": active.get("take_profit") if active else None,
             "sl_pips": active.get("sl_pips") if active else None,
+            "sl_atr_multiple": active.get("sl_atr_multiple") if active else None,
+            "sl_method": active.get("sl_method") if active else "5-bar swing + ATR buffer",
             "target_pips": active.get("target_pips") if active else None,
             "pip_size": pip_size,
             "sl_price_distance": active.get("sl_price_distance") if active else None,
@@ -389,7 +446,7 @@ class ASTOneMinuteSignalEngine:
             "asset": asset, "action": "WAITING", "status": "WARMING UP",
             "price": round(price, 8) if price > 0 else None,
             "entry": None, "stop_loss": None, "take_profit": None,
-            "sl_pips": None, "target_pips": None, "pip_size": pip_size,
+            "sl_pips": None, "sl_atr_multiple": None, "sl_method": "6-bar swing + ATR buffer", "target_pips": None, "pip_size": pip_size,
             "sl_price_distance": None, "target_price_distance": None,
             "risk_reward": None, "move_potential_pips": round(potential, 1),
             "minimum_move_pips": MIN_MOVE_POTENTIAL_PIPS,

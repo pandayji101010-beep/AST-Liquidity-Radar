@@ -7,6 +7,7 @@ from ast_signal_engine import (
     TF_MS,
     _closed,
     _move_potential_pips,
+    _adaptive_stop,
     _setup,
 )
 
@@ -79,13 +80,45 @@ class ASTSignalEngineTests(unittest.TestCase):
         self.assertEqual(result["action"], "BUY")
         self.assertGreaterEqual(result["move_potential_pips"], MIN_MOVE_POTENTIAL_PIPS)
         self.assertGreaterEqual(result["target_pips"], 90.0)
-        self.assertIn(result["sl_pips"], (30, 50))
+        self.assertGreaterEqual(result["sl_pips"], 1)
+        self.assertGreaterEqual(result["risk_reward"], 1.5)
 
     def test_incomplete_one_minute_candle_is_not_used(self):
         base = 1_700_000_000_000
         rows = [{"t": base, "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 1}]
         closed = _closed(rows, "1m", base + 59_999)
         self.assertEqual(closed, [])
+
+
+    def test_buy_stop_sits_below_recent_swing_with_atr_buffer(self):
+        rows = [
+            {"t": i, "o": 1000.0, "h": 1050.0, "l": 990.0, "c": 1020.0, "v": 1.0}
+            for i in range(8)
+        ]
+        plan = _adaptive_stop(rows, "BUY", entry=1100.0, atr=40.0, pip_size=1.0)
+        self.assertIsNotNone(plan)
+        self.assertGreater(plan["sl_pips"], 50)
+        self.assertLess(plan["stop_loss"], min(row["l"] for row in rows[-6:-1]))
+        self.assertGreaterEqual(plan["sl_atr_multiple"], 1.5)
+
+    def test_sell_stop_sits_above_recent_swing_with_atr_buffer(self):
+        rows = [
+            {"t": i, "o": 1000.0, "h": 1040.0, "l": 950.0, "c": 980.0, "v": 1.0}
+            for i in range(8)
+        ]
+        plan = _adaptive_stop(rows, "SELL", entry=900.0, atr=40.0, pip_size=1.0)
+        self.assertIsNotNone(plan)
+        self.assertGreater(plan["sl_pips"], 50)
+        self.assertGreater(plan["stop_loss"], max(row["h"] for row in rows[-6:-1]))
+        self.assertGreaterEqual(plan["sl_atr_multiple"], 1.5)
+
+    def test_structure_stop_wider_than_four_atr_is_rejected(self):
+        rows = [
+            {"t": i, "o": 1000.0, "h": 1100.0, "l": 800.0, "c": 1000.0, "v": 1.0}
+            for i in range(8)
+        ]
+        plan = _adaptive_stop(rows, "BUY", entry=1200.0, atr=20.0, pip_size=1.0)
+        self.assertIsNone(plan)
 
     def test_gold_pip_convention_is_one_cent(self):
         self.assertEqual(PIP_SIZE["GOLD"], 0.01)
